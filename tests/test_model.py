@@ -220,7 +220,9 @@ def test_tool_timing():
     assert t.tools[1].wall == 0.0
     a = model.skill_regret([s])["(none)"]
     assert a["secs"] == t.duration
-    assert a["hist"]["Bash"] == {"calls": 2, "secs": 2.0, "wall": 9.0}
+    assert a["hist"]["Bash"]["calls"] == 2
+    assert a["hist"]["Bash"]["secs"] == 2.0
+    assert a["hist"]["Bash"]["wall"] == 9.0
     os.unlink(f.name)
 
 
@@ -264,6 +266,150 @@ def test_scan_skill_regret_paths():
     agg = model.scan_skill_regret(paths=[p])           # explicit paths, no root
     assert "superpowers:brainstorming" in agg
     shutil.rmtree(d, ignore_errors=True)
+
+
+def test_parse_mcp_and_walkback():
+    assert model.parse_mcp("mcp__stele__memory_search") == ("stele", "memory_search")
+    assert model.parse_mcp("mcp__a__b__c") == ("a", "b__c")
+    assert model.parse_mcp("Bash") == (None, None)
+    assert model.parse_mcp("") == (None, None)
+    assert model._is_walkback("let's try a different approach")
+    assert model._is_walkback("instead, use rg to search")
+    assert model._is_walkback("switching to a different tool")
+    assert not model._is_walkback("yes go on")
+
+
+def test_tool_error_marks_call():
+    """tool_result.is_error must mark the matching ToolCall.is_error so the ✗
+    actually shows in the TUI."""
+    import os
+    rows = [
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
+                    "message": {"role": "user", "content": "go"}}),
+        json.dumps({"type": "assistant", "requestId": "r1",
+                    "timestamp": "2026-06-22T10:00:01.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "tool_use", "id": "u1",
+                                             "name": "Bash", "input": {"command": "ls"}}],
+                                "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:02.000Z",
+                    "message": {"role": "user",
+                                "content": [{"type": "tool_result", "tool_use_id": "u1",
+                                             "is_error": True,
+                                             "content": "No such file"}]}}),
+    ]
+    f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+    f.write("\n".join(rows))
+    f.close()
+    s = model.load_session(f.name)
+    assert s.turns[0].tool_errors == 1
+    assert s.turns[0].tools[0].is_error is True
+    os.unlink(f.name)
+
+
+def test_time_breakdown_sums_to_duration():
+    """exec + you + think == duration; you only counts AskUserQuestion exec."""
+    import os
+    rows = [
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
+                    "message": {"role": "user", "content": "go"}}),
+        json.dumps({"type": "assistant", "requestId": "r1",
+                    "timestamp": "2026-06-22T10:00:01.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "tool_use", "id": "u1",
+                                             "name": "Bash", "input": {"command": "ls"}}],
+                                "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:03.000Z",
+                    "message": {"role": "user",
+                                "content": [{"type": "tool_result", "tool_use_id": "u1",
+                                             "content": "ok"}]}}),
+        json.dumps({"type": "assistant", "requestId": "r2",
+                    "timestamp": "2026-06-22T10:00:30.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "tool_use", "id": "u2",
+                                             "name": "AskUserQuestion",
+                                             "input": {"q": "x"}}],
+                                "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:45.000Z",
+                    "message": {"role": "user",
+                                "content": [{"type": "tool_result", "tool_use_id": "u2",
+                                             "content": "ans"}]}}),
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:01:00.000Z",
+                    "message": {"role": "user", "content": "thanks"}}),
+    ]
+    f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+    f.write("\n".join(rows))
+    f.close()
+    s = model.load_session(f.name)
+    t = s.turns[0]
+    exec_s, you, think, _ = t.time_breakdown
+    assert abs((exec_s + you + think) - t.duration) < 0.5
+    assert exec_s == 2.0            # Bash 10:00:01 -> 10:00:03
+    assert you == 15.0              # AskUserQuestion 10:00:30 -> 10:00:45
+    assert think > 0                # model-think + idle after
+    os.unlink(f.name)
+
+
+def test_intent_walkback_recorded():
+    """A user prompt like 'let's try a different approach' marks the previous
+    turn.walkback with the pushback text captured."""
+    import os
+    rows = [
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
+                    "message": {"role": "user", "content": "first try"}}),
+        json.dumps({"type": "assistant", "requestId": "r1",
+                    "timestamp": "2026-06-22T10:00:01.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "text", "text": "trying"}],
+                                "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:05.000Z",
+                    "message": {"role": "user",
+                                "content": "instead, use a different tool"}}),
+    ]
+    f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+    f.write("\n".join(rows))
+    f.close()
+    s = model.load_session(f.name)
+    assert s.turns[0].walkback is True
+    assert "different tool" in s.turns[0].walkback_text
+    os.unlink(f.name)
+
+
+def test_per_tool_token_attribution():
+    """One assistant response emitting 2 tool calls assigns its 100 output
+    tokens as 50/50 (per-response, evenly). Per-turn attribution would assign
+    all 100 to each, which is dishonest."""
+    import os
+    rows = [
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
+                    "message": {"role": "user", "content": "go"}}),
+        json.dumps({"type": "assistant", "requestId": "r1",
+                    "timestamp": "2026-06-22T10:00:01.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [
+                                    {"type": "tool_use", "id": "u1", "name": "Bash",
+                                     "input": {"command": "ls"}},
+                                    {"type": "tool_use", "id": "u2", "name": "Read",
+                                     "input": {"file_path": "/x"}}],
+                                "usage": {"output_tokens": 100, "input_tokens": 5}}}),
+    ]
+    f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+    f.write("\n".join(rows))
+    f.close()
+    s = model.load_session(f.name)
+    outs = [c.out for c in s.turns[0].tools]
+    assert sum(outs) == 100
+    assert all(o > 0 for o in outs)
+    os.unlink(f.name)
+
+
+def test_skill_regret_breakdown_keys():
+    s = model.load_session(_fixture())
+    a = model.skill_regret([s])["superpowers:brainstorming"]
+    for k in ("corrections", "self_corrections", "walkbacks",
+              "tool_errors", "error_turns", "loops"):
+        assert k in a, k
+    assert a["corrections"] == 1     # turn-1 was corrected by turn-2
 
 
 def _run():

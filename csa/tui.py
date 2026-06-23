@@ -69,7 +69,8 @@ class ProjectsScreen(Sortable, Screen):
     """Landing screen: sessions rolled up per project. Enter a project to see its
     sessions, or 'a' for every session across all projects."""
     BINDINGS = [("q", "app.quit", "Quit"), ("a", "all_sessions", "All sessions"),
-                ("s", "skills", "Skill regret"), ("t", "tools", "Tools")]
+                ("s", "skills", "Skill regret"), ("t", "tools", "Tools"),
+                ("m", "mcp", "MCP")]
     COLS = [
         ("project", lambda d: d["project"], False),
         ("sessions", lambda d: d["sessions"], True),
@@ -111,7 +112,8 @@ class ProjectsScreen(Sortable, Screen):
         self.status.update(
             f"[b]{len(self.rows)}[/b] projects · [b]{len(summaries)}[/b] sessions · "
             f"~[b]${total:,.0f}[/b] · Enter a project · [b]a[/b]=all · "
-            f"[b]s[/b]=skills [b]t[/b]=tools · [b]1-9[/b]/click header=sort")
+            f"[b]s[/b]=skills [b]t[/b]=tools [b]m[/b]=MCP · "
+            f"[b]1-9[/b]/click header=sort")
         self._fill()
 
     def _fill(self):
@@ -143,11 +145,17 @@ class ProjectsScreen(Sortable, Screen):
         self.app.push_screen(SkillScreen(root=self.root, scope="all projects"))
 
     def action_tools(self):
+        if not self.summaries:
+            return
         merged = {}
         for s in self.summaries:
             for nm, c in s.hist.items():
                 merged[nm] = merged.get(nm, 0) + c
         self.app.push_screen(ToolsScreen("all projects", merged))
+
+    def action_mcp(self):
+        if self.summaries:
+            self.app.push_screen(McpScreen("all projects", summaries=self.summaries))
 
 
 # --------------------------------------------------------------------------- #
@@ -155,7 +163,8 @@ class BrowserScreen(Sortable, Screen):
     """A list of sessions — either a pre-scanned subset (one project / all), or
     scanned from `root` (used by --local). is_root=True means Esc quits."""
     BINDINGS = [("escape", "back", "Back"), ("q", "app.quit", "Quit"),
-                ("s", "skills", "Skill regret"), ("t", "tools", "Tools")]
+                ("s", "skills", "Skill regret"), ("t", "tools", "Tools"),
+                ("m", "mcp", "MCP")]
     COLS = [
         ("$", lambda s: s.cost, True),
         ("out", lambda s: s.out, True),
@@ -215,8 +224,8 @@ class BrowserScreen(Sortable, Screen):
                                          for s in self.summaries) else "")
             self.status.update(
                 f"[b]{len(self.summaries)}[/b] sessions · ~[b]${total:,.0f}[/b] "
-                f"token-value{est} · Enter opens · [b]s[/b]=skills [b]t[/b]=tools · "
-                f"[b]1-9[/b]/click header=sort")
+                f"token-value{est} · Enter opens · [b]s[/b]=skills [b]t[/b]=tools "
+                f"[b]m[/b]=MCP · [b]1-9[/b]/click header=sort")
         else:
             self.status.update(
                 "[yellow]No sessions here.[/yellow] For --local, run csa from a "
@@ -256,12 +265,31 @@ class BrowserScreen(Sortable, Screen):
                 merged[nm] = merged.get(nm, 0) + c
         self.app.push_screen(ToolsScreen(self.title_, merged))
 
+    def action_mcp(self):
+        if self.summaries:
+            self.app.push_screen(McpScreen(self.title_, summaries=self.summaries))
+
+
+    def action_tools(self):
+        if not self.summaries:
+            return
+        merged = {}
+        for s in self.summaries:
+            for nm, c in s.hist.items():
+                merged[nm] = merged.get(nm, 0) + c
+        self.app.push_screen(ToolsScreen(self.title_, merged))
+
+    def action_mcp(self):
+        if self.summaries:
+            self.app.push_screen(McpScreen(self.title_, summaries=self.summaries))
+
 
 # --------------------------------------------------------------------------- #
 class SessionScreen(Sortable, Screen):
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit"),
                 ("g", "graphs", "Stats ⇄ graphs"),
-                ("a", "all_turns", "All turns"), ("t", "tools", "Tools")]
+                ("a", "all_turns", "All turns"), ("t", "tools", "Tools"),
+                ("m", "mcp", "MCP")]
     COLS = [
         ("#", lambda t: t.index, False),
         ("gap", lambda t: t.gap, True),
@@ -320,7 +348,8 @@ class SessionScreen(Sortable, Screen):
             f"[b]{s.session_id[:8]}[/b] · {s.model or '?'} · {len(s.turns)} turns · "
             f"out {human(s.out)} · peak-ctx [b]{s.ctx_peak:,}[/b] · "
             f"[b]${s.cost:,.2f}[/b]{flag} · {s.tok_per_s:.0f} tok/s · "
-            f"[dim]g=stats⇄graphs · a=all turns · Enter a turn for its commands[/dim]")
+            f"[dim]g=stats⇄graphs · a=all turns · t=tools · m=MCP · "
+            f"Enter a turn for its commands[/dim]")
         self.panel.update(self._panel_text())
         self._fill_buckets()
         self._fill_turns()
@@ -329,24 +358,28 @@ class SessionScreen(Sortable, Screen):
         s, st = self.session, self.session.stats()
         skills = sorted(st["skills"].items(), key=lambda kv: -kv[1])
         sk_str = ", ".join(f"{k.split(':')[-1]}×{v}" for k, v in skills[:8]) or "none"
+        mcp_serv = st.get("mcp_servers", {})
+        mcp_str = ", ".join(f"{srv}×{n}" for srv, n in sorted(
+            mcp_serv.items(), key=lambda kv: -kv[1])[:5]) or "none"
         return "\n".join([
             f"[b]started[/b] {when(s.start)}    [b]ended[/b] {when(s.end)}    "
             f"([b]{s.wall / 60:.0f}m[/b] elapsed wall-clock)",
             "",
             f"[b]turns[/b] {st['turns']}   [b]tool calls[/b] {st['tools']}   "
-            f"[b]skill loads[/b] {st['skill_calls']}   [b]MCP calls[/b] {st['mcp']}   "
+            f"[b]skill loads[/b] {st['skill_calls']}   [b]MCP calls[/b] {st['mcp']}  "
+            f"[dim]({mcp_str})[/dim]   "
             f"[b]subagents[/b] {st['subagents']}   [b]asked you[/b] {st['asks']}",
             "",
             f"[yellow]friction[/yellow] {st['friction_turns']}/{st['turns']} turns  ·  "
-            f"corrections {st['corrections']}  ·  self-corrections "
-            f"{st['self_corrections']}  ·  error-turns {st['error_turns']} "
-            f"({st['tool_errors']} tool errors)  ·  retry-loops {st['loops']}  "
-            f"[dim](suspicion, not proof)[/dim]",
+            f"corrections {st['corrections']}  ·  walkbacks {st['walkbacks']}  ·  "
+            f"self-corrections {st['self_corrections']}  ·  "
+            f"error-turns {st['error_turns']} ({st['tool_errors']} tool errors)  ·  "
+            f"retry-loops {st['loops']}  [dim](suspicion, not proof)[/dim]",
             "",
             f"[b]skills used[/b]: {sk_str}",
             "",
             "[dim]press [b]g[/b] for the time-bucketed graphs · [b]t[/b] for the tools "
-            "histogram · Enter a turn below to drill in[/dim]",
+            "histogram · [b]m[/b] for MCP servers · Enter a turn below to drill in[/dim]",
         ])
 
     def _fill_buckets(self):
@@ -370,8 +403,10 @@ class SessionScreen(Sortable, Screen):
         self.view.sort(key=self.COLS[self.sort_i][1], reverse=self.sort_rev)
         self.turn_table.clear()
         for i, t in enumerate(self.view):
-            fr = "".join(c for c, x in [("C", t.correction), ("S", t.self_correct),
-                                        ("E", t.tool_errors >= 2), ("L", t.looped)] if x) or "·"
+            fr = "".join(c for c, x in [("C", t.correction), ("W", t.walkback),
+                                        ("S", t.self_correct),
+                                        ("E", t.tool_errors >= 2),
+                                        ("L", t.looped)] if x) or "·"
             sk = ",".join(sorted(x.split(":")[-1] for x in t.skills)) or "-"
             self.turn_table.add_row(
                 str(t.index), f"{t.gap:.0f}s", f"{t.duration:.0f}s", human(t.out),
@@ -392,11 +427,17 @@ class SessionScreen(Sortable, Screen):
     def action_tools(self):
         if not self.session:
             return
-        hist = {}
+        hist, toks = {}, {}
         for t in self.all_turns:
             for c in t.tools:
                 hist[c.name] = hist.get(c.name, 0) + 1
-        self.app.push_screen(ToolsScreen(self.session.session_id[:8], hist))
+                toks[c.name] = toks.get(c.name, 0) + c.out
+        self.app.push_screen(ToolsScreen(self.session.session_id[:8], hist, toks))
+
+    def action_mcp(self):
+        if self.session:
+            self.app.push_screen(McpScreen(self.session.session_id[:8],
+                                           session=self.session))
 
     def on_data_table_header_selected(self, e):
         if e.data_table is not self.turn_table:
@@ -433,16 +474,40 @@ class TurnScreen(Screen):
         t = self.turn
         yield Header()
         fr = [name for name, x in [("user-correction-next", t.correction),
-                                   ("self-correction", t.self_correct),
-                                   (f"{t.tool_errors} tool-error(s)", t.tool_errors >= 2),
-                                   ("tool-loop", t.looped)] if x]
+                                    ("self-correction", t.self_correct),
+                                    ("user-walkback-next", t.walkback),
+                                    (f"{t.tool_errors} tool-error(s)", t.tool_errors >= 2),
+                                    ("tool-loop", t.looped)] if x]
         fr_line = ("[yellow]friction (suspicion, not proof): " + ", ".join(fr)
                    + "[/yellow]") if fr else "[green]no friction flags[/green]"
+        # wall-time breakdown
+        exec_s, you_s, think_s, _ = t.time_breakdown
+        bd = (f"time [b]{t.duration:.0f}s[/b] = "
+              f"exec [b]{exec_s:.0f}s[/b] · you [b]{you_s:.0f}s[/b] · "
+              f"model-think [b]{think_s:.0f}s[/b]")
         prompt = (t.prompt or "").strip() or "(no text prompt)"
+        # friction evidence: show the actual pushback text so you can see WHY
+        err_calls = [c for c in t.tools if c.is_error]
+        err_line = ""
+        if err_calls:
+            err_line = (f"\n[red]✗ {len(err_calls)} failing call(s):[/red] "
+                        + ", ".join(c.name for c in err_calls[:3])
+                        + (" …" if len(err_calls) > 3 else "")
+                        + "  [dim](Enter to read the error)[/dim]")
+        walk_line = ""
+        if t.walkback_text:
+            walk_line = (f"\n[yellow]next user pivoted:[/yellow] "
+                         f"[dim]\"{t.walkback_text[:140]}\"[/dim]")
+        corr_line = ""
+        if t.correction_text:
+            corr_line = (f"\n[yellow]next user pushed back:[/yellow] "
+                         f"[dim]\"{t.correction_text[:140]}\"[/dim]")
         head = (f"[b]Turn {t.index}[/b] · gap {t.gap:.0f}s · dur [b]{t.duration:.0f}s[/b] · "
                 f"in {human(t.fresh)} / out [b]{human(t.out)}[/b] tok · ctx {t.ctx:,} · "
                 f"[b]${t.cost:,.2f}[/b] · {t.tok_per_s:.0f} tok/s\n"
-                f"skills: {', '.join(sorted(t.skills)) or '-'}\n{fr_line}\n"
+                f"skills: {', '.join(sorted(t.skills)) or '-'}\n"
+                f"{bd}  [dim](you = time waiting on AskUserQuestion)[/dim]\n"
+                f"{fr_line}{err_line}{corr_line}{walk_line}\n"
                 f"[dim]exec = tool run · wall = call→next step · Δ = model think + "
                 f"idle after (AskUserQuestion exec = you answering) · "
                 f"Enter a command to see its full input + result[/dim]\n\n"
@@ -484,8 +549,12 @@ class StepScreen(Screen):
     def compose(self):
         c = self.call
         err = " [red]✗ error[/red]" if c.is_error else ""
-        head = (f"[b]{c.name}[/b]{err} · exec [b]{c.dur:.0f}s[/b] · wall {c.wall:.0f}s "
-                f"· Δ {max(0.0, c.wall - c.dur):.0f}s")
+        out_note = (f" · out ~{c.out} tok [dim](per-response, overlaps if "
+                    f"this response emitted several tools)[/dim]") if c.out else ""
+        srv, tool = model.parse_mcp(c.name)
+        mcp_note = (f" [dim](mcp server: {srv})[/dim]") if srv else ""
+        head = (f"[b]{c.name}[/b]{mcp_note}{err} · exec [b]{c.dur:.0f}s[/b] · wall "
+                f"{c.wall:.0f}s · Δ {max(0.0, c.wall - c.dur):.0f}s{out_note}")
         try:
             inp = json.dumps(c.input, indent=2, ensure_ascii=False) if c.input else "(no input)"
         except (TypeError, ValueError):
@@ -546,22 +615,40 @@ class SkillScreen(Sortable, Screen):
 
     def _populate(self, agg):
         self.rows = list(agg.items())
+        # show how many skills are low-sample so the leaderboard is read with
+        # the right skepticism
+        low = sum(1 for _, a in self.rows if a["fires"] < 5)
+        low_note = (f" · [dim]{low} skill{'s' if low != 1 else ''} fired <5× "
+                    f"(regret% dimmed, sunk in sort)[/dim]") if low else ""
         self.status.update(
             "[b]turns[/b]=turns the skill ran · [b]tools[/b]=tool calls it triggered · "
             "[b]asks[/b]=times it asked YOU a question · [b]regret%[/b]=turns with "
-            "friction [dim](correlation, not proof)[/dim]. Enter a skill to see what "
-            "it actually does.")
+            "friction [dim](correlation, not proof)[/dim]. Enter a skill to see "
+            "WHERE its friction came from (corrections vs walkbacks vs tool "
+            "errors)." + low_note)
         self._fill()
 
     def _fill(self):
-        self.rows.sort(key=self.COLS[self.sort_i][1], reverse=self.sort_rev)
+        # Low-sample rows (n < 5) sink to the bottom when sorting by regret% so
+        # the scary "100%" from one-shot skills stops dominating the leaderboard.
+        key = self.COLS[self.sort_i][1]
+        rows = list(self.rows)
+        if self.sort_i == 5:                                # regret% column
+            rows.sort(key=lambda r: (r[1]["fires"] < 5, -key(r), r[0]),
+                      reverse=not self.sort_rev)
+        else:
+            rows.sort(key=key, reverse=self.sort_rev)
         self.table.clear()
-        for i, (sk, a) in enumerate(self.rows):
-            pct = 100 * a["regret_turns"] / a["fires"] if a["fires"] else 0
-            mark = "~" if a["fires"] < 5 else ""   # low sample
+        for i, (sk, a) in enumerate(rows):
+            fires = a["fires"]
+            pct = 100 * a["regret_turns"] / fires if fires else 0
+            if fires < 5:
+                pct_s = "[dim]n<5[/dim]"
+            else:
+                pct_s = f"{pct:.0f}%"
             self.table.add_row(
-                sk, f"{a['fires']}{mark}", human(a["out"]), str(a["tools"]),
-                str(a["asks"]), f"{pct:.0f}%", key=str(i))
+                sk, str(fires), human(a["out"]), str(a["tools"]),
+                str(a["asks"]), pct_s, key=str(i))
 
     def on_data_table_header_selected(self, e):
         i = e.column_index
@@ -590,11 +677,12 @@ class SkillDetailScreen(Screen):
         per_turn = a["tools"] / fires
         asks_per = a["asks"] / fires
         pct = 100 * a["regret_turns"] / fires
+        pct_s = "[dim]n<5[/dim]" if a["fires"] < 5 else f"{pct:.0f}%"
         ask_note = ""
         if a["asks"]:
             ask_note = (f"\n[yellow]⚠ asked YOU a question {a['asks']} times "
                         f"({asks_per:.1f}/turn) — a skill that interrupts to ask for "
-                        f"extra input slows you down, often unnoticed.[/yellow]")
+                        "extra input slows you down, often unnoticed.[/yellow]")
         inj = a.get("injections", 0)
         inj_line = ""
         if inj:
@@ -605,12 +693,40 @@ class SkillDetailScreen(Screen):
                         f" · {inj} load{'s' if inj != 1 else ''} seen{heavy}")
         secs = a.get("secs", 0.0)
         tstr = f"{secs / 60:.0f}m" if secs >= 120 else f"{secs:.0f}s"
+        # friction breakdown — show WHERE the regret came from so 100% from one
+        # correction is read as different from 100% from twelve tool errors
+        corr = a.get("corrections", 0)
+        wlk = a.get("walkbacks", 0)
+        sc = a.get("self_corrections", 0)
+        te = a.get("tool_errors", 0)
+        et = a.get("error_turns", 0)
+        loops = a.get("loops", 0)
+        rt = a["regret_turns"]
+        bd = []
+        if corr:
+            bd.append(f"user-correction [b]{corr}[/b]")
+        if wlk:
+            bd.append(f"user-walkback [b]{wlk}[/b]")
+        if sc:
+            bd.append(f"self-correction [b]{sc}[/b]")
+        if te:
+            bd.append(f"tool-errors [b]{te}[/b] ({et} turn{'s' if et != 1 else ''})")
+        if loops:
+            bd.append(f"retry-loops [b]{loops}[/b]")
+        bd_line = ("\n[b]friction breakdown[/b]: " + " · ".join(bd)
+                   if bd else "\n[b]friction breakdown[/b]: [green]none[/green]")
+        if rt and bd:
+            # caveat when sum of components > regret_turns (turns can have more
+            # than one friction type — note this honestly rather than gaming it)
+            if corr + wlk + sc + et + loops > rt:
+                bd_line += ("\n[dim](turns can carry multiple friction types, so "
+                            "components may exceed regret-turns)[/dim]")
         head = (f"[b]{self.skill}[/b]\n"
                 f"ran in [b]{a['fires']}[/b] turns · spent [b]{tstr}[/b] "
                 f"({secs / fires:.0f}s/turn) · generated [b]{human(a['out'])}[/b] "
                 f"output tok · triggered [b]{a['tools']}[/b] tool calls "
-                f"({per_turn:.1f}/turn) · friction in {pct:.0f}% of its turns "
-                f"[dim](suspicion)[/dim]{inj_line}{ask_note}\n\n"
+                f"({per_turn:.1f}/turn) · friction in {pct_s} of its turns "
+                f"[dim](suspicion)[/dim]{bd_line}{inj_line}{ask_note}\n\n"
                 f"[b]What it actually triggers[/b] — calls · exec vs wall "
                 f"[dim](wall−exec = model think after; AskUserQuestion exec = "
                 f"you answering)[/dim]:")
@@ -622,16 +738,17 @@ class SkillDetailScreen(Screen):
 
     def on_mount(self):
         self.sub_title = "what this skill really does"
-        self.table.add_columns("tool", "calls", "exec", "wall", "% of its tool use")
+        self.table.add_columns("tool", "calls", "exec", "wall", "out tok", "% of its tool use")
         hist = self.data["hist"]
         total = sum(h["calls"] for h in hist.values()) or 1
         for name, h in sorted(hist.items(), key=lambda kv: kv[1]["calls"],
                               reverse=True):
             self.table.add_row(name, str(h["calls"]), f"{h['secs']:.0f}s",
                                f"{h.get('wall', 0):.0f}s",
+                               human(h.get("out", 0)) if h.get("out") else "-",
                                f"{100 * h['calls'] / total:.0f}%")
         if not self.data["hist"]:
-            self.table.add_row("(no tool calls)", "0", "0s", "0s", "-")
+            self.table.add_row("(no tool calls)", "0", "0s", "0s", "-", "-")
 
 
 # --------------------------------------------------------------------------- #
@@ -642,17 +759,22 @@ class ToolsScreen(Sortable, Screen):
             ("calls", lambda r: r[1], True),
             ("share", lambda r: r[1], True)]
 
-    def __init__(self, scope, hist):
+    def __init__(self, scope, hist, tokens=None):
         super().__init__()
         self.scope = scope
         self.rows = list(hist.items())
         self.total = sum(hist.values()) or 1
+        # tokens: tool_name -> out-tokens (per-response attribution, can overlap
+        # across tools emitted in the same response — labeled in the UI)
+        self.tokens = tokens or {}
         self.sort_i, self.sort_rev = 1, True
 
     def compose(self):
         yield Header()
         yield Static(f"[b]Tools — {self.scope}[/b] · [b]{self.total:,}[/b] tool calls "
-                     f"across {len(self.rows)} tool types · click a header to sort",
+                     f"across {len(self.rows)} tool types · click a header to sort · "
+                     f"out tokens per-response (overlap if one response emits "
+                     f"several tools)",
                      id="head")
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
         yield self.table
@@ -660,7 +782,8 @@ class ToolsScreen(Sortable, Screen):
 
     def on_mount(self):
         self.sub_title = "tools called"
-        self.table.add_columns("tool", "calls", "% of all calls")
+        cols = ["tool", "calls", "out tok", "% of all calls"]
+        self.table.add_columns(*cols)
         self._fill()
 
     def _fill(self):
@@ -668,7 +791,8 @@ class ToolsScreen(Sortable, Screen):
         self.table.clear()
         m = max((c for _, c in self.rows), default=1)
         for name, c in self.rows:
-            self.table.add_row(name, f"{c:,}",
+            tok = self.tokens.get(name, 0)
+            self.table.add_row(name, f"{c:,}", human(tok) if tok else "-",
                                f"{_bar(c, m, 8)} {100 * c / self.total:.1f}%")
 
     def on_data_table_header_selected(self, e):
@@ -676,6 +800,83 @@ class ToolsScreen(Sortable, Screen):
         self.sort_rev = self.COLS[i][2] if i != self.sort_i else not self.sort_rev
         self.sort_i = i
         self._fill()
+
+
+# --------------------------------------------------------------------------- #
+class McpScreen(Screen):
+    """MCP servers -> their tools. Two-level: list of servers on entry, drill in
+    to see per-tool counts and out-tokens for that server."""
+    BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
+
+    def __init__(self, scope, summaries=None, session=None):
+        super().__init__()
+        self.scope = scope
+        self.summaries = summaries or []
+        self.session = session  # if set, use session-level data (has per-tool out)
+
+    def _aggregate(self):
+        """Returns ({server: calls}, {server: out_tokens}, {server: {tool: calls}})"""
+        calls, outs, by_tool = {}, {}, {}
+        if self.session:
+            for t in self.session.turns:
+                for c in t.tools:
+                    srv, tool = model.parse_mcp(c.name)
+                    if not srv:
+                        continue
+                    calls[srv] = calls.get(srv, 0) + 1
+                    outs[srv] = outs.get(srv, 0) + c.out
+                    by_tool.setdefault(srv, {})
+                    by_tool[srv][tool] = by_tool[srv].get(tool, 0) + 1
+        else:
+            for s in self.summaries:
+                for nm, c in s.hist.items():
+                    srv, _ = model.parse_mcp(nm)
+                    if srv:
+                        calls[srv] = calls.get(srv, 0) + c
+        return calls, outs, by_tool
+
+    def compose(self):
+        calls, outs, by_tool = self._aggregate()
+        total_calls = sum(calls.values())
+        yield Header()
+        if total_calls == 0:
+            yield Static("[yellow]No MCP calls recorded in this scope.[/yellow]\n\n"
+                         "[dim]MCP tools are namespaced as "
+                         "[b]mcp__<server>__<tool>[/b]. If you're running MCP "
+                         "servers, their calls show up here grouped by server.[/dim]",
+                         id="head")
+        else:
+            top = max(calls.values())
+            server_lines = []
+            for srv, n in sorted(calls.items(), key=lambda kv: -kv[1]):
+                bar = _bar(n, top, 10)
+                tok = human(outs.get(srv, 0)) if outs else "-"
+                n_tool = len(by_tool.get(srv, {}))
+                server_lines.append(
+                    f"  [b]{srv}[/b]  {bar} [b]{n}[/b] call{'s' if n != 1 else ''}"
+                    f"  · {n_tool} tool{'s' if n_tool != 1 else ''}"
+                    f"  · out [b]{tok}[/b] tok"
+                )
+            head = (f"[b]MCP servers — {self.scope}[/b] · "
+                    f"[b]{total_calls}[/b] calls across "
+                    f"[b]{len(calls)}[/b] server{'s' if len(calls) != 1 else ''}"
+                    f"\n" + "\n".join(server_lines))
+            yield Static(head, id="head")
+        self.table = DataTable(cursor_type="row", zebra_stripes=True)
+        yield self.table
+        yield Footer()
+
+    def on_mount(self):
+        self.sub_title = "MCP servers"
+        self.table.add_columns("server", "calls", "out tok", "share")
+        calls, outs, _ = self._aggregate()
+        total = sum(calls.values()) or 1
+        top = max(calls.values(), default=1)
+        for srv, n in sorted(calls.items(), key=lambda kv: -kv[1]):
+            self.table.add_row(srv, f"{n}", human(outs.get(srv, 0)) if outs else "-",
+                               f"{_bar(n, top, 8)} {100 * n / total:.1f}%")
+        if not calls:
+            self.table.add_row("(no MCP calls)", "-", "-", "-")
 
 
 # --------------------------------------------------------------------------- #

@@ -11,15 +11,17 @@ and screen mockups, see the [README](../README.md).
 2. [Concepts & vocabulary](#concepts--vocabulary)
 3. [The text CLI](#the-text-cli)
 4. [The TUI: navigation](#the-tui-navigation)
-5. [Screen — Browser](#screen--browser)
-6. [Screen — Session](#screen--session)
-7. [Screen — Turn detail](#screen--turn-detail)
-8. [Screen — Skill regret](#screen--skill-regret)
-9. [Screen — Skill detail](#screen--skill-detail)
-10. [Screen — Tools](#screen--tools)
-11. [Reading the numbers honestly](#reading-the-numbers-honestly)
-12. [Worked examples](#worked-examples)
-13. [Limits & FAQ](#limits--faq)
+5. [Screen — Projects](#screen--projects)
+6. [Screen — Browser](#screen--browser)
+7. [Screen — Session](#screen--session)
+8. [Screen — Turn detail](#screen--turn-detail)
+9. [Screen — Skill regret](#screen--skill-regret)
+10. [Screen — Skill detail](#screen--skill-detail)
+11. [Screen — Tools](#screen--tools)
+12. [Screen — MCP servers](#screen--mcp-servers)
+13. [Reading the numbers honestly](#reading-the-numbers-honestly)
+14. [Worked examples](#worked-examples)
+15. [Limits & FAQ](#limits--faq)
 
 ---
 
@@ -110,9 +112,9 @@ The **landing screen**. Sessions rolled up per project, one row each.
 `out` · `in+cache` · `last used`. Default sort: `$` descending.
 
 **Keys:** `Enter` open that project's sessions · **`a`** all sessions across every
-project · **`s`** skill regret (all projects) · **`t`** tools (all projects) · `q`
-quit. (`csa --tui --local` skips this screen and lands on the Browser for the
-current directory's project.)
+project · **`s`** skill regret (all projects) · **`t`** tools (all projects) ·
+**`m`** MCP servers (all projects) · `q` quit. (`csa --tui --local` skips this
+screen and lands on the Browser for the current directory's project.)
 
 ---
 
@@ -140,7 +142,8 @@ Sessions list — reached by opening a project on the Projects screen, by pressi
 **Default sort:** `$` descending — your most expensive sessions first.
 
 **Keys:** `Enter` open session · **`s`** skill regret (scoped to this list) · **`t`**
-tools (scoped to this list) · `Esc` back to Projects · `q` quit.
+tools (scoped to this list) · **`m`** MCP servers (scoped to this list) · `Esc`
+back to Projects · `q` quit.
 
 ---
 
@@ -163,9 +166,11 @@ The session at a glance:
 - **turns · tool calls · skill loads · MCP calls · subagents · asked you** — the
   activity profile. "asked you" is `AskUserQuestion` count; "skill loads" is how
   many times a skill was invoked; "MCP calls" counts `mcp__…` tools.
-- **friction line** — turns flagged, broken down into corrections,
-  self-corrections, error-turns (with total tool errors), and retry-loops.
-  Labeled *suspicion, not proof*.
+- **friction line** — turns flagged, broken down into corrections, walkbacks
+  (next prompt pivots to a different approach), self-corrections, error-turns
+  (with total tool errors), and retry-loops. Labeled *suspicion, not proof*.
+- **MCP server rollup** — top 5 servers by call count, in dim text next to the
+  MCP call total.
 - **skills used** — which skills ran, with a count of turns each.
 
 ### Time graphs (press `g`)
@@ -200,12 +205,14 @@ Every turn (or the filtered subset). **Default order is chronological**; sort wi
 | Flag | Means |
 |---|---|
 | `C` | Your **next** prompt pushed back (opened with a rejection, or "that's wrong / try again / revert …"). |
-| `S` | The assistant **self-corrected** ("my mistake / I was wrong / let me correct"). |
+| `W` | Your **next** prompt pivoted to a different approach ("let's try a different tool", "instead, use …"). |
+| `S` | The assistant **self-corrected** ("my mistake / I was wrong / let me correct") or pivoted after a tool error in the same turn. |
 | `E` | **≥2** tool errors in the turn (one alone is normal — a grep miss, a test that fails by design). |
 | `L` | A **retry loop** — the same tool with identical arguments called 3+ times. |
 
 **Keys:** `Enter` open turn detail · **`g`** stats ⇄ time graphs · **`t`** this
-session's tools view · **`a`** show all turns (clear filter) · `Esc` back · `q` quit.
+session's tools view · **`m`** MCP servers view · **`a`** show all turns (clear
+filter) · `Esc` back · `q` quit.
 
 ---
 
@@ -216,6 +223,21 @@ Opened by selecting a turn. The deepest level: what actually happened.
 **Header** shows the turn's stats — including **in / out tokens** and total
 **duration** — the skills that ran, a friction line (named flags, labeled
 "suspicion, not proof"), and the **prompt** text that started it.
+
+**Wall-time breakdown** — the header includes a 3-way split of the turn's
+duration: `time 1217s = exec 320s · you 0s · model-think 897s`. `exec` is the
+sum of all tool-execution latencies. `you` is `AskUserQuestion`'s exec time
+(honest: the tool's purpose is to wait for you). `model-think` is everything
+else — the time the model spent between calls and idle after the last one.
+
+**Friction evidence** — when the turn has friction, the header also shows the
+**actual pushback text**:
+
+- failing commands listed by name with a `✗` (press Enter to read the error);
+- "next user pushed back: \"no, that's wrong, try again\"" if `C` fired;
+- "next user pivoted: \"instead, use a different tool\"" if `W` fired.
+
+This is the difference between *seeing a turn was friction* and *knowing why*.
 
 **Commands table** — every tool call in the turn, in order:
 
@@ -233,12 +255,13 @@ which single command ate the clock.
 
 ### Step detail — press Enter on a command
 
-Selecting a command opens its **full step**: a header with the tool name and its
-exec/wall/Δ timing, then the **complete input** (the whole Bash command, the full
-file text written, the entire prompt handed to a subagent — pretty-printed JSON)
-and the **captured result** (capped). This is the bottom of the drill-down: from
-projects → sessions → a session → a turn → a single command's exact input and
-output. `Esc` returns to the commands list.
+Selecting a command opens its **full step**: a header with the tool name, the
+parent MCP server (if any), `✗ error` if it failed, exec/wall/Δ timing, and the
+**estimated out tokens** (per-response attribution), then the **complete input**
+(the whole Bash command, the full file text written, the entire prompt handed to
+a subagent — pretty-printed JSON) and the **captured result** (capped). This is
+the bottom of the drill-down: from projects → sessions → a session → a turn →
+a single command's exact input and output. `Esc` returns to the commands list.
 
 ---
 
@@ -252,13 +275,16 @@ built by analyzing each session's turns (~8s, with a progress line).
 | Column | Meaning |
 |---|---|
 | `skill` | The skill (or `(none)` for un-attributed work). |
-| `turns` | Turns the skill was attributed to. A `~` suffix marks a low sample (<5). |
+| `turns` | Turns the skill was attributed to. |
 | `out` | Output tokens generated across those turns — the **reliable "heaviness"** number. |
 | `tools` | Total tool calls the skill triggered. |
 | `asks` | Times the skill asked **you** a question (`AskUserQuestion`). High = it interrupts you. |
-| `regret%` | Share of the skill's turns that showed friction. Noisy — read it with care. |
+| `regret%` | Share of the skill's turns that showed friction. Noisy — read it with care. Skills fired <5× show `n<5` (dimmed) and sink to the bottom when sorted by regret — a 100% from one fire is noise. |
 
 **Default sort:** `out` descending. Click any header to re-sort.
+
+The banner also reports how many skills fired <5× in your corpus, so the
+leaderboard is read with the right skepticism.
 
 **Enter a skill** to open its detail screen.
 
@@ -277,7 +303,14 @@ and what does it actually do?**
 **Header** shows:
 
 - how many turns it ran, **total wall-time spent** (and per-turn average), output
-  tokens generated, tool calls (and per-turn rate), friction %.
+  tokens generated, tool calls (and per-turn rate), friction %. Skills with <5
+  fires show `n<5` instead of a percentage.
+- **friction breakdown** — where the friction actually came from:
+  `user-correction N · user-walkback N · self-correction N · tool-errors N (M turns)
+  · retry-loops N`. A 100% from one self-correction is very different from a
+  100% from twenty tool errors; this surfaces the difference. (When components
+  exceed regret-turns, the line notes that one turn can carry multiple friction
+  types.)
 - **context weight** — `loads ~X KB (~Y tok, est) into context each time it runs`,
   with the number of loads observed. A `(heavy!)` tag appears over ~30k tokens.
   This is the SKILL.md text the skill injects on every invocation — the silent
@@ -293,6 +326,7 @@ and what does it actually do?**
 | `calls` | How many times this skill triggered it. |
 | `exec` | Total tool-execution time in that tool across the skill's turns (sum of result−call latencies). `AskUserQuestion` exec is *you* answering. Use it to spot which tools a skill genuinely spends time *running* (Bash, subagents, server tools) vs. instant ones (Edit, Read). |
 | `wall` | Total call→next-step time. `wall − exec` ≈ how much model *thinking* the skill does around that tool — e.g. lots of Bash calls each followed by long reasoning. |
+| `out tok` | Per-response attribution of `output_tokens` from the responses that emitted these calls. Overlaps when one response emits several tools — labeled in the header. |
 | `% of its tool use` | Share of the skill's total tool calls. |
 
 A skill's advertised behavior and its real behavior can differ. This table is the
@@ -309,10 +343,30 @@ Reached with **`t`** — from the **browser** it covers **all sessions**; from
 |---|---|
 | `tool` | Tool name. |
 | `calls` | How many times it was called. |
+| `out tok` | Session-scoped only — estimated output tokens per tool (per-response attribution; overlaps when one response emits several tools). |
 | `% of all calls` | Share of all tool calls, with an inline bar. |
 
 **Default sort:** `calls` descending. Click a header to re-sort. Use it to answer
 "what does my Claude Code actually *do* all day" (usually: Bash, Read, Edit).
+
+---
+
+## Screen — MCP servers
+
+Reached with **`m`** — from the **browser** it covers **all sessions**; from
+**inside a session** it covers **that session**. Groups every `mcp__<server>__<tool>`
+call by server. The header shows the top servers with their call counts, number of
+distinct tools, and per-server out tokens (session-scoped, per-response).
+
+| Column | Meaning |
+|---|---|
+| `server` | MCP server name (the middle segment of `mcp__<server>__<tool>`). |
+| `calls` | Total calls to that server. |
+| `out tok` | Session-scoped only — sum of per-response `output_tokens` for this server. |
+| `share` | Share of all MCP calls, with an inline bar. |
+
+Use it to see which MCP servers are actually pulling weight in your sessions —
+the unscoped view from the browser counts calls; the session view adds tokens.
 
 ---
 

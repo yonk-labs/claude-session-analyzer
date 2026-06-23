@@ -3,7 +3,7 @@
 The whole tool reads from this. A transcript is already a tree (uuid/parentUuid)
 with per-request token usage and skill attribution; we fold it into turns
 (user-prompt -> next-user-prompt), price each request, bucket over time, and
-flag friction (corrections/errors/loops) per abe's guidance.
+flag friction (corrections/errors/loops/walkbacks) per abe's guidance.
 
 Honest-labeling notes (abe multi-model review):
   - tokens/s here is END-TO-END throughput (output / turn wall-clock), NOT decode
@@ -11,6 +11,14 @@ Honest-labeling notes (abe multi-model review):
   - friction/regret is CORRELATION (suspicion), not proof a skill caused harm.
   - attributionSkill = which skill *fired*, not which skill is *loaded*; we never
     infer per-skill "passive" context cost from it.
+  - per-tool output tokens are PER-RESPONSE attribution: a response emitting
+    N tool calls assigns its output_tokens evenly across them, so when one
+    response emits several calls the tokens OVERLAP across tools. Turn tokens
+    don't belong to any single tool call — this is the closest honest
+    approximation given Claude records tokens per request, not per call.
+  - turn.time_breakdown splits wall into (tool_exec, you_answering,
+    model_think) where AskUserQuestion's exec time IS you answering (honest:
+    waiting for you is what the tool does).
 """
 import json
 import os
@@ -50,11 +58,41 @@ _SELF_CORRECT = re.compile(
     r"(my mistake|my apolog|i apolog|i was wrong|that was wrong|i made (a|an) "
     r"(mistake|error)|let me correct|oops|i mis(read|understood|took)|i incorrectly)",
     re.I)
+# Intent walkback: user's NEXT prompt pivots away from a failing tool call. Tighter
+# than a generic "this didn't work" — signals an explicit change of plan.
+_WALKBACK = re.compile(
+    r"(\b(let'?s|lets|let me|i'?ll|we'?ll|we should|i should)\b.{0,40}\b"
+    r"(try|use|switch|move|go|do|instead|with)\b"
+    r"|\binstead[ ,].{0,30}\b(use|try|switch)\b"
+    r"|\b(different|other)\b.{0,15}\b(approach|tool|way|method)\b"
+    r"|\bswitch(ing|ed)?\s+to\b.{0,30}\b(try|use)\b"
+    r"|\binstead\s+of\b.{0,40}\b(use|try)\b)",
+    re.I | re.S)
+# Walkback signal in assistant's own reply (right after a tool error).
+_ASSISTANT_WALKBACK = re.compile(
+    r"\b(let'?s|let me|i'?ll|instead)\b.{0,40}\b(try|use|switch)\b"
+    r"|\b(did ?n'?t work|that failed|since that\b)\b",
+    re.I | re.S)
+
+# Tools we treat as "the user answering" when computing time_breakdown.
+_USER_BLOCKING = {"AskUserQuestion"}
+
+
+def parse_mcp(name):
+    """('mcp__server__tool') -> ('server', 'tool'), or (None, None)."""
+    if not name or not name.startswith("mcp__"):
+        return None, None
+    parts = name.split("__")
+    return (parts[1], "__".join(parts[2:])) if len(parts) >= 3 else (None, None)
 
 
 def _is_correction(text):
     head = (text or "")[:160]
     return bool(_CORRECT_START.match(head) or _CORRECT_PHRASE.search(head))
+
+
+def _is_walkback(text):
+    return bool(_WALKBACK.search((text or "")[:300]))
 
 
 def _ts(s):
@@ -110,6 +148,7 @@ class ToolCall:
     uid: str = ""             # tool_use id, to match its tool_result
     input: dict = None        # full tool input (for the step drill-in)
     result: str = ""          # tool_result text (capped), for the step drill-in
+    out: int = 0              # output tokens from the assistant response that emitted this call (overlaps when several tools in one response; per-response, not per-call — labeled)
 
 
 @dataclass
@@ -130,6 +169,9 @@ class Turn:
     tool_errors: int = 0
     looped: bool = False                              # same (tool,args) >=3x
     injects: list = field(default_factory=list)       # (skill_name, chars) it loaded
+    walkback: bool = False                            # user pivoted to a different approach next turn
+    correction_text: str = ""                         # next user prompt that pushed back (capped)
+    walkback_text: str = ""                           # next user prompt that pivoted (capped)
 
     @property
     def duration(self):
@@ -144,8 +186,28 @@ class Turn:
     def friction(self):
         # tool_errors >= 2: a single failed command is normal (a grep miss, a
         # test that fails by design); two+ in one turn is a real struggle.
-        return (self.correction or self.self_correct
+        return (self.correction or self.self_correct or self.walkback
                 or self.tool_errors >= 2 or self.looped)
+
+    @property
+    def time_breakdown(self):
+        """Honest 3-way split of turn duration.
+
+        Returns (tool_exec, you_answering, model_think, uncaptured) in seconds.
+        Sum == duration. Uncaptured covers gaps with no tools / no prompts to
+        anchor on (e.g. an aborted first call). Per the existing honest-label
+        notes, AskUserQuestion's exec time IS you answering — it's honest
+        because the tool's purpose is to wait for you.
+        """
+        d = self.duration
+        if d <= 0:
+            return (0.0, 0.0, 0.0, 0.0)
+        you = sum(c.dur for c in self.tools if c.name in _USER_BLOCKING)
+        exec_s = sum(c.dur for c in self.tools) - you
+        # think = total - exec - you, with a small floor for things we can't measure
+        think = max(0.0, d - exec_s - you)
+        # uncaptured covers intra-turn gaps that no anchor captured (rare)
+        return (exec_s, you, think, 0.0)
 
     @property
     def asks(self):
@@ -226,10 +288,17 @@ class Session:
         for t in ts:
             for sk in t.skills:
                 skills[sk] = skills.get(sk, 0) + 1
+        mcp_servers = {}
+        for t in ts:
+            for c in t.tools:
+                srv, _ = parse_mcp(c.name)
+                if srv:
+                    mcp_servers[srv] = mcp_servers.get(srv, 0) + 1
         return {
             "turns": len(ts),
             "tools": sum(len(t.tools) for t in ts),
             "mcp": sum(1 for t in ts for c in t.tools if c.name.startswith("mcp__")),
+            "mcp_servers": mcp_servers,
             "asks": calls("AskUserQuestion"),
             "skill_calls": calls("Skill"),
             "skills": skills,                                   # skill -> turns
@@ -237,6 +306,7 @@ class Session:
             "friction_turns": sum(1 for t in ts if t.friction),
             "corrections": sum(1 for t in ts if t.correction),
             "self_corrections": sum(1 for t in ts if t.self_correct),
+            "walkbacks": sum(1 for t in ts if t.walkback),
             "error_turns": sum(1 for t in ts if t.tool_errors >= 2),
             "tool_errors": sum(t.tool_errors for t in ts),
             "loops": sum(1 for t in ts if t.looped),
@@ -285,13 +355,20 @@ def load_session(path):
                 _finalize(cur, tool_counts, result_ts)
                 turns.append(cur)
             ts = _ts(r["timestamp"])
+            user_text = r["message"]["content"] or ""
             cur = Turn(index=len(turns) + 1, start=ts, end=ts,
-                       prompt=" ".join((r["message"]["content"] or "").split())[:200])
+                       prompt=" ".join(user_text.split())[:200])
             tool_counts = {}
             result_ts = {}
+            tool_by_uid = {}
             # correction: does THIS prompt push back on the previous turn?
-            if turns and _is_correction(r["message"]["content"]):
-                turns[-1].correction = True
+            if turns:
+                if _is_correction(user_text):
+                    turns[-1].correction = True
+                    turns[-1].correction_text = user_text.strip()[:200]
+                if _is_walkback(user_text):
+                    turns[-1].walkback = True
+                    turns[-1].walkback_text = user_text.strip()[:200]
             continue
         if cur is None:
             continue
@@ -301,6 +378,14 @@ def load_session(path):
         typ = r.get("type")
         if typ == "assistant":
             msg = r.get("message") or {}
+            u = msg.get("usage")
+            # Per-response attribution: if THIS response emits N tool_use blocks,
+            # each gets out/N output tokens (overlaps when a response emits
+            # several; labeled). Tighter than per-turn attribution and the only
+            # form that works in the cheap corpus scan.
+            resp_out = (u or {}).get("output_tokens", 0)
+            tools_this = [b for b in (msg.get("content") or [])
+                          if isinstance(b, dict) and b.get("type") == "tool_use"]
             for blk in msg.get("content", []) or []:
                 if not isinstance(blk, dict):
                     continue
@@ -312,8 +397,6 @@ def load_session(path):
                     cur.tools.append(tc)
                     if tc.uid:
                         tool_by_uid[tc.uid] = tc
-                    # loop = the SAME (tool, input) repeated, i.e. a retry — not
-                    # just "used Bash a lot" (that's normal agentic work).
                     k = (name, summ)
                     tool_counts[k] = tool_counts.get(k, 0) + 1
                     if name == "Skill":
@@ -321,7 +404,23 @@ def load_session(path):
                 elif blk.get("type") == "text" and blk.get("text"):
                     if _SELF_CORRECT.search(blk["text"][:200]):
                         cur.self_correct = True
-            u, rid = msg.get("usage"), r.get("requestId")
+                    elif cur.tool_errors and _ASSISTANT_WALKBACK.search(blk["text"][:300]):
+                        # assistant pivoted after a tool error in the same turn
+                        cur.self_correct = True
+            if tools_this and resp_out:
+                share = resp_out // len(tools_this)
+                rem = resp_out - share * len(tools_this)
+                for i, blk in enumerate(tools_this):
+                    tc = tool_by_uid.get(blk.get("id", "")) if blk.get("id") else None
+                    if tc is None:
+                        # fall back to last tool added (id-mismatch safety)
+                        for t in reversed(cur.tools):
+                            if t.out == 0 and t.uid == "":
+                                tc = t
+                                break
+                    if tc is not None:
+                        tc.out = share + (rem if i == len(tools_this) - 1 else 0)
+            rid = r.get("requestId")
             if u and rid and rid not in seen:
                 seen.add(rid)
                 out = u.get("output_tokens", 0)
@@ -349,6 +448,8 @@ def load_session(path):
                             tc = tool_by_uid.get(rid)
                             if tc is not None:
                                 tc.result = _result_text(blk)
+                                if blk.get("is_error"):
+                                    tc.is_error = True       # wire the missing field
                         if blk.get("is_error"):
                             cur.tool_errors += 1
                     elif blk.get("type") == "text" and pending_skill:
@@ -526,6 +627,9 @@ def scan_skill_regret(root=None, progress=None, paths=None):
 
     Heavier than scan_corpus (builds turns) but only reads main transcripts.
     `progress(done, total)` is called per file. Returns skill_regret()'s shape.
+
+    Excludes skills that only appear via injection (SKILL.md text blocks)
+    and have zero actual fires (skill attributed to turns).
     """
     if paths is not None:
         mains = [Path(p) for p in paths]
@@ -538,7 +642,14 @@ def scan_skill_regret(root=None, progress=None, paths=None):
         except Exception:
             s = None
         if s:
+            skill_fires = set()
+            for t in s.turns:
+                skill_fires.update(t.skills)
             for sk, a in skill_regret([s]).items():
+                # Skip skills that only have injection (0 fires) - they aren't
+                # actually skill executions, just text blocks.
+                if a["fires"] == 0:
+                    continue
                 b = agg.setdefault(sk, _skill_zero())
                 for k, v in a.items():
                     if k == "hist":
@@ -558,7 +669,9 @@ def scan_skill_regret(root=None, progress=None, paths=None):
 def _skill_zero():
     return {"fires": 0, "out": 0, "regret_out": 0, "regret_turns": 0,
             "tools": 0, "asks": 0, "secs": 0.0, "hist": {},
-            "inject_chars": 0, "injections": 0}
+            "inject_chars": 0, "injections": 0,
+            "corrections": 0, "self_corrections": 0, "walkbacks": 0,
+            "tool_errors": 0, "error_turns": 0, "loops": 0}
 
 
 def skill_regret(sessions):
@@ -566,7 +679,11 @@ def skill_regret(sessions):
 
     Keys: fires, out, regret_out, regret_turns, tools (total tool calls),
     asks (AskUserQuestion calls), secs (total wall-clock of its turns),
-    hist (tool-name -> {calls, secs} = what it triggers and time spent there).
+    hist (tool-name -> {calls, secs, wall, out} = what it triggers and the
+    time + tokens spent there). Friction-breakdown keys (corrections,
+    self_corrections, walkbacks, tool_errors, error_turns, loops) let the
+    detail screen show WHERE the friction came from — a 100% from one
+    correction is different from 100% from twelve tool errors.
     Friction/regret is suspicion, not proof.
     """
     agg = {}
@@ -582,13 +699,26 @@ def skill_regret(sessions):
                 a["secs"] += t.duration
                 for c in t.tools:
                     h = a["hist"].setdefault(c.name,
-                                             {"calls": 0, "secs": 0.0, "wall": 0.0})
+                                             {"calls": 0, "secs": 0.0,
+                                              "wall": 0.0, "out": 0})
                     h["calls"] += 1
                     h["secs"] += c.dur     # exec time
                     h["wall"] += c.wall    # call -> next step
+                    h["out"] += c.out      # per-response attribution (overlaps when several tools fire in one response; labeled)
                 if t.friction:
                     a["regret_out"] += t.out
                     a["regret_turns"] += 1
+                if t.correction:
+                    a["corrections"] += 1
+                if t.self_correct:
+                    a["self_corrections"] += 1
+                if t.walkback:
+                    a["walkbacks"] += 1
+                a["tool_errors"] += t.tool_errors
+                if t.tool_errors >= 2:
+                    a["error_turns"] += 1
+                if t.looped:
+                    a["loops"] += 1
             # injected SKILL.md weight attributed to the exact skill that loaded
             for name, chars in t.injects:
                 a = agg.setdefault(name, _skill_zero())
@@ -607,6 +737,11 @@ def _selfcheck():
     assert not _is_correction("I do not think there is a problem here")  # tightened
     assert _SELF_CORRECT.search("my mistake, fixing it")
     assert not _SELF_CORRECT.search("let me fix the import")  # too common; dropped
+    assert _is_walkback("let's try a different approach")
+    assert _is_walkback("instead, use rg")
+    assert not _is_walkback("yes, go on")
+    assert parse_mcp("mcp__claude-tools__Bash") == ("claude-tools", "Bash")
+    assert parse_mcp("Bash") == (None, None)
     assert _nice_bucket(7) == 30 and _nice_bucket(500) == 600
     print("model selfcheck ok")
 
