@@ -1,10 +1,10 @@
-# claude-trace
+# claude-session-analyzer
 
 **See what Claude Code is *really* doing to your context — and which prompt or
 skill is quietly slowing you down.**
 
 Claude Code already writes a full JSONL transcript of every session to
-`~/.claude/projects/`. `claude-trace` reads those transcripts and turns them into
+`~/.claude/projects/`. `csa` reads those transcripts and turns them into
 tokens, cost, time, and **per-skill behavior** — no wrapper, no instrumentation,
 no extra capture step. The data is already there; this just reads it.
 
@@ -18,13 +18,13 @@ no extra capture step. The data is already there; this just reads it.
 ## Quickstart
 
 ```bash
-git clone git@github.com:yonk-labs/claude-trace.git
-cd claude-trace
+git clone git@github.com:yonk-labs/claude-session-analyzer.git
+cd claude-session-analyzer
 uv venv .venv && uv pip install --python .venv/bin/python -e .
 # or: python3 -m pip install -e .
 
-claude-trace            # corpus profile: spend, bloat ratio, top sessions
-claude-trace --tui      # the interactive browser (main surface)
+csa            # corpus profile: spend, bloat ratio, top sessions
+csa --tui      # the interactive browser (main surface)
 ```
 
 The text CLI is stdlib-only. The TUI's one dependency is
@@ -35,10 +35,10 @@ The text CLI is stdlib-only. The TUI's one dependency is
 ## What you get
 
 ```
-claude-trace                  # one-shot text report over every session
-claude-trace --tui            # interactive: browse → drill down → analyze
-claude-trace --session FILE   # per-turn breakdown of one transcript
-claude-trace /other/projects  # point at a different root
+csa                  # one-shot text report over every session
+csa --tui            # interactive: browse → drill down → analyze
+csa --session FILE   # per-turn breakdown of one transcript
+csa /other/projects  # point at a different root
 ```
 
 ### The CLI report
@@ -75,7 +75,7 @@ is illustrative.
 ### 1 · Browser — every session, sortable
 
 ```
-┌ claude-trace ───────────────────────────────────────────────────────────────┐
+┌ csa ───────────────────────────────────────────────────────────────┐
 │ 1,240 sessions · ~$8,432 token-value · click a header to sort · s=skill regret│
 ├─────────┬──────┬──────────┬───────┬──────┬───────┬──────────┬─────────────────┤
 │      $ ▼│  out │ in+cache │ turns │ wall │ tok/s │ model    │ project         │
@@ -131,7 +131,7 @@ walked itself back · **E**=2+ tool errors · **L**=retried the same command.
 │  1 │ Skill             │ claude-api                                           │
 │  2 │ Bash              │ jq -c 'select(.type==…) ' transcript.jsonl           │
 │  3 │ Bash ✗            │ python3 profile.py --selfcheck                       │
-│  4 │ Write             │ claude_trace/pricing.py                              │
+│  4 │ Write             │ csa/pricing.py                              │
 └────┴───────────────────┴──────────────────────────────────────────────────────┘
 ```
 
@@ -212,7 +212,7 @@ Corpus-wide from the browser, or for one session from inside it.
 
 ## What it measures (and how honestly)
 
-`claude-trace` measures **tax** — tokens, cost, time — not answer quality. It's
+`csa` measures **tax** — tokens, cost, time — not answer quality. It's
 careful about what the numbers can and can't say:
 
 - **`tok/s`** is end-to-end throughput (`output ÷ turn wall-clock`), **not** decode
@@ -231,7 +231,7 @@ careful about what the numbers can and can't say:
 
 Each transcript line carries a millisecond timestamp, a `uuid`/`parentUuid` tree,
 per-request token `usage` (output / input / cache-read / cache-creation, keyed by
-`requestId`), and an `attributionSkill` tag. `claude-trace`:
+`requestId`), and an `attributionSkill` tag. `csa`:
 
 1. folds requests that share a `requestId` into one turn (no double-counting),
 2. rolls turns up between user prompts,
@@ -243,7 +243,7 @@ per-request token `usage` (output / input / cache-read / cache-creation, keyed b
 Base rates from Anthropic's pricing reference (Opus $5/$25, Sonnet $3/$15,
 Haiku $1/$5, Fable $10/$50 per MTok); cache-read 0.1×, cache-write-5m 1.25×,
 cache-write-1h 2× input. Unknown/older models fall back to a default rate and are
-flagged `(est.)`. Edit `claude_trace/pricing.py` when rates change.
+flagged `(est.)`. Edit `csa/pricing.py` when rates change.
 
 ## Limits
 

@@ -1,8 +1,8 @@
-"""claude-trace text CLI: understand your Claude Code usage from transcripts.
+"""csa text CLI: understand your Claude Code usage from transcripts.
 
-  claude-trace                 corpus profile (all sessions under the root)
-  claude-trace --session FILE  per-turn breakdown for one transcript
-  claude-trace --tui           launch the interactive browser (see tui.py)
+  csa                 corpus profile (all sessions under the root)
+  csa --session FILE  per-turn breakdown for one transcript
+  csa --tui           launch the interactive browser (see tui.py)
 
 The TUI is the main surface; this CLI is the pipeable/scriptable view and the
 fast path for "what's my usage" without launching a UI.
@@ -70,7 +70,7 @@ def session(path):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="claude-trace",
+    ap = argparse.ArgumentParser(prog="csa",
                                  description="understand your Claude Code usage")
     ap.add_argument("root", nargs="?", default=str(DEFAULT_ROOT))
     ap.add_argument("--session", help="per-turn detail for one transcript file")

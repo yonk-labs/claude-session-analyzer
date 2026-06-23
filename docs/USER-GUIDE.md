@@ -1,4 +1,4 @@
-# claude-trace — User Guide
+# claude-session-analyzer — User Guide
 
 A complete reference for every screen, column, and metric. For the quick pitch
 and screen mockups, see the [README](../README.md).
@@ -26,8 +26,8 @@ and screen mockups, see the [README](../README.md).
 ## Install & first run
 
 ```bash
-git clone git@github.com:yonk-labs/claude-trace.git
-cd claude-trace
+git clone git@github.com:yonk-labs/claude-session-analyzer.git
+cd claude-session-analyzer
 uv venv .venv && uv pip install --python .venv/bin/python -e .
 # or, without uv:  python3 -m pip install -e .
 ```
@@ -38,11 +38,11 @@ The text CLI needs only the standard library. The TUI needs
 First run:
 
 ```bash
-claude-trace          # text report over ~/.claude/projects
-claude-trace --tui    # interactive browser
+csa          # text report over ~/.claude/projects
+csa --tui    # interactive browser
 ```
 
-No configuration. `claude-trace` reads the JSONL transcripts Claude Code already
+No configuration. `csa` reads the JSONL transcripts Claude Code already
 writes to `~/.claude/projects/<project>/<session-id>.jsonl` (and that session's
 `subagents/*.jsonl`). It never writes to them.
 
@@ -54,7 +54,7 @@ writes to `~/.claude/projects/<project>/<session-id>.jsonl` (and that session's
 |---|---|
 | **Transcript** | One session's JSONL file. Every line is a message, tool call, tool result, or metadata, with a millisecond timestamp. |
 | **Request** | One API call, identified by `requestId`. A single turn can contain many. Token `usage` is reported per request. |
-| **requestId folding** | Multiple assistant lines can share one `requestId`; their `usage` is the *same* call. claude-trace counts it **once** (the naive sum double-counts output). |
+| **requestId folding** | Multiple assistant lines can share one `requestId`; their `usage` is the *same* call. csa counts it **once** (the naive sum double-counts output). |
 | **Turn** | One conversational round: a user prompt and everything until the next user prompt. May span many requests and tool calls. |
 | **out / fresh / cache-read / cache-write** | Output tokens generated; fresh input (full price); standing context replayed from cache (~10% price); context written to cache (1.25× for 5-min TTL, 2× for 1-hour). |
 | **Bloat ratio** | `cache-read ÷ fresh-input`. How many tokens of standing config replay per token you type. High = a heavy global config. |
@@ -69,15 +69,15 @@ writes to `~/.claude/projects/<project>/<session-id>.jsonl` (and that session's
 ## The text CLI
 
 ```
-claude-trace [ROOT] [--session FILE] [--tui] [--top N]
+csa [ROOT] [--session FILE] [--tui] [--top N]
 ```
 
 | Invocation | What it does |
 |---|---|
-| `claude-trace` | Corpus profile over `ROOT` (default `~/.claude/projects`): global token totals, bloat ratio, estimated spend, and the top-N sessions by spend. |
-| `claude-trace --session FILE` | Per-turn table for one transcript: gap, duration, out, ctx, $, tok/s, tool count, friction flags, skills. |
-| `claude-trace --tui` | Launch the interactive browser. |
-| `claude-trace /path` | Use a different transcripts root. |
+| `csa` | Corpus profile over `ROOT` (default `~/.claude/projects`): global token totals, bloat ratio, estimated spend, and the top-N sessions by spend. |
+| `csa --session FILE` | Per-turn table for one transcript: gap, duration, out, ctx, $, tok/s, tool count, friction flags, skills. |
+| `csa --tui` | Launch the interactive browser. |
+| `csa /path` | Use a different transcripts root. |
 | `--top N` | How many sessions to list in the profile (default 15). |
 
 The CLI is pipeable and stdlib-only — handy for scripts or a quick check without
@@ -273,7 +273,7 @@ Reached with **`t`** — from the **browser** it covers **all sessions**; from
 
 ## Reading the numbers honestly
 
-claude-trace measures **tax**, not quality. Keep these in mind:
+csa measures **tax**, not quality. Keep these in mind:
 
 - **High tokens ≠ bad.** A big session that produced a working feature is fine.
   The signal is *tokens with rework* (friction), or *tokens you didn't choose*
@@ -335,8 +335,8 @@ transcript stores the text, not a token count, so context weight uses chars÷4.
 It's accurate enough to rank skills by weight.
 
 **It says cost is `(est.)` — why?** The model isn't in the verified price table
-(an older or unknown model). Update `claude_trace/pricing.py` to add rates.
+(an older or unknown model). Update `csa/pricing.py` to add rates.
 
 **Where are the transcripts?** `~/.claude/projects/<slugged-cwd>/<session>.jsonl`,
-plus `…/<session>/subagents/agent-*.jsonl`. Point claude-trace at any root with
-`claude-trace /that/root`.
+plus `…/<session>/subagents/agent-*.jsonl`. Point csa at any root with
+`csa /that/root`.

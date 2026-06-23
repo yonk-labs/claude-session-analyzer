@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Thin shim: `python3 profile.py ...` == `claude-trace ...`.
+"""Thin shim: `python3 profile.py ...` == `csa ...`.
 
-Kept so the original entry point still works. Real code lives in claude_trace/.
+Kept so the original entry point still works. Real code lives in csa/.
 """
-from claude_trace.cli import main
+from csa.cli import main
 
 if __name__ == "__main__":
     main()

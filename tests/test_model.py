@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from claude_trace import model, pricing  # noqa: E402
+from csa import model, pricing  # noqa: E402
 
 T0 = "2026-06-22T10:00:00.000Z"
 

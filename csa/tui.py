@@ -465,7 +465,7 @@ class ClaudeTraceApp(App):
     #buckets { height: 38%; border-bottom: solid $primary; }
     DataTable { height: 1fr; }
     """
-    TITLE = "claude-trace"
+    TITLE = "csa"
 
     def __init__(self, root):
         super().__init__()
