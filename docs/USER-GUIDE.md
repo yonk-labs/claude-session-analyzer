@@ -194,7 +194,7 @@ Opened by selecting a turn. The deepest level: what actually happened.
 |---|---|
 | `#` | Order within the turn. |
 | `tool` | Tool name. A `✗` marks a tool result that errored. |
-| `time` | Wall-clock seconds to the next step — **includes** model thinking, tool execution, and any wait for your input. Not pure tool-execution time. |
+| `time` | **Tool-execution latency**: the result's timestamp minus the call's — the actual time the call took (a Bash command's run time, a subagent's run, a server tool's round-trip). For `AskUserQuestion` it's *your* answer time, since waiting for you is what that tool does. |
 | `summary` | One-line summary of the call (the command, file path, query, or skill name). |
 
 This is where you see, concretely, what a turn spent its time and tokens on — and
@@ -251,7 +251,7 @@ and what does it actually do?**
 |---|---|
 | `tool` | Tool name. |
 | `calls` | How many times this skill triggered it. |
-| `time` | Total wall-clock seconds spent in that tool across the skill's turns. Same caveat as the turn screen — includes think/wait time, so `AskUserQuestion` time is mostly *you* deciding, not the tool. |
+| `time` | Total tool-execution time in that tool across the skill's turns (sum of result−call latencies). `AskUserQuestion` time is *you* answering — honest, since that's the tool's whole job. Use it to spot which tools a skill genuinely spends time *running* (Bash, subagents, server tools) vs. instant ones (Edit, Read). |
 | `% of its tool use` | Share of the skill's total tool calls. |
 
 A skill's advertised behavior and its real behavior can differ. This table is the

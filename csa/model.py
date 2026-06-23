@@ -73,7 +73,8 @@ class ToolCall:
     summary: str
     ts: datetime = None
     is_error: bool = False
-    dur: float = 0.0          # seconds until the next call / turn end
+    dur: float = 0.0          # tool-exec seconds: result_ts - call_ts (else gap fallback)
+    uid: str = ""             # tool_use id, to match its tool_result
 
 
 @dataclass
@@ -213,16 +214,18 @@ def load_session(path):
 
     turns, cur, seen = [], None, set()
     tool_counts = {}
+    result_ts = {}         # tool_use_id -> when its result came back (per turn)
     pending_skill = None   # set when a Skill tool fires; claims the next text block
     for r in recs:
         if _is_user_prompt(r):
             if cur:
-                _finalize(cur, tool_counts)
+                _finalize(cur, tool_counts, result_ts)
                 turns.append(cur)
             ts = _ts(r["timestamp"])
             cur = Turn(index=len(turns) + 1, start=ts, end=ts,
                        prompt=" ".join((r["message"]["content"] or "").split())[:200])
             tool_counts = {}
+            result_ts = {}
             # correction: does THIS prompt push back on the previous turn?
             if turns and _is_correction(r["message"]["content"]):
                 turns[-1].correction = True
@@ -241,7 +244,8 @@ def load_session(path):
                 if blk.get("type") == "tool_use":
                     name = blk.get("name", "?")
                     summ = _tool_summary(blk.get("input"))
-                    cur.tools.append(ToolCall(name, summ, _ts(r.get("timestamp"))))
+                    cur.tools.append(ToolCall(name, summ, _ts(r.get("timestamp")),
+                                              uid=blk.get("id", "")))
                     # loop = the SAME (tool, input) repeated, i.e. a retry — not
                     # just "used Bash a lot" (that's normal agentic work).
                     k = (name, summ)
@@ -272,15 +276,19 @@ def load_session(path):
                 for blk in content:
                     if not isinstance(blk, dict):
                         continue
-                    if blk.get("type") == "tool_result" and blk.get("is_error"):
-                        cur.tool_errors += 1
+                    if blk.get("type") == "tool_result":
+                        rid = blk.get("tool_use_id")
+                        if rid:
+                            result_ts[rid] = _ts(r.get("timestamp"))
+                        if blk.get("is_error"):
+                            cur.tool_errors += 1
                     elif blk.get("type") == "text" and pending_skill:
                         # the SKILL.md body lands as a text block after the Skill
                         # call (no id link) — attribute it by proximity.
                         cur.injects.append((pending_skill, len(blk.get("text") or "")))
                         pending_skill = None
     if cur:
-        _finalize(cur, tool_counts)
+        _finalize(cur, tool_counts, result_ts)
         turns.append(cur)
 
     # gaps between turns
@@ -294,14 +302,20 @@ def load_session(path):
     return Session(path=path, project=proj, session_id=sid, model=model, turns=turns)
 
 
-def _finalize(turn, tool_counts):
+def _finalize(turn, tool_counts, result_ts):
     turn.looped = any(c >= 3 for c in tool_counts.values())
-    # per-command duration = gap to the next command (or turn end). Captures
-    # model-think + tool-exec between calls; the only timing the trace exposes.
+    # per-command time = tool-execution latency (result_ts - call_ts): the actual
+    # time the call took, excluding model thinking before it and idle after it.
+    # For AskUserQuestion that latency is you answering — which is honest, since
+    # waiting for you IS what the tool does. Fall back to gap-to-next only when a
+    # tool has no recorded result (e.g. an interrupted final call).
     for i, c in enumerate(turn.tools):
-        nxt = turn.tools[i + 1].ts if i + 1 < len(turn.tools) else turn.end
-        if c.ts and nxt:
-            c.dur = max(0.0, (nxt - c.ts).total_seconds())
+        res = result_ts.get(c.uid)
+        if res and c.ts:
+            c.dur = max(0.0, (res - c.ts).total_seconds())
+        else:
+            nxt = turn.tools[i + 1].ts if i + 1 < len(turn.tools) else turn.end
+            c.dur = max(0.0, (nxt - c.ts).total_seconds()) if c.ts and nxt else 0.0
 
 
 def _session_key(path):

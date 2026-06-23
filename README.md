@@ -123,16 +123,16 @@ walked itself back · **E**=2+ tool errors · **L**=retried the same command.
 │ Turn 3 · gap 117s · dur 1217s · in 1.9k / out 64.2k tok · ctx 384,334 · $9.96 │
 │ skills: claude-api                                                            │
 │ friction (suspicion, not proof): 2 tool-error(s), tool-loop                   │
-│ time = wall-clock to the next step (model think + tool exec + any wait)       │
+│ time = tool-execution latency (result − call); AskUserQuestion = you answering │
 │                                                                               │
 │ prompt: current pricing per million tokens for Opus 4.x, Sonnet 4.x…          │
 ├────┬─────────────────┬───────┬───────────────────────────────────────────────┤
 │  # │ tool            │ time  │ summary                                       │
 ├────┼─────────────────┼───────┼───────────────────────────────────────────────┤
-│  1 │ Skill           │   2s  │ claude-api                                    │
-│  2 │ Bash            │  40s  │ time python3 profile.py --top 15              │
-│  3 │ ToolSearch      │  29s  │ select:mcp__plugin_abe_abe__debate,…          │
-│  4 │ Write           │  25s  │ csa/pricing.py                                │
+│  1 │ Skill           │   3s  │ claude-api                                    │
+│  2 │ Bash            │   8s  │ time python3 profile.py --top 15              │
+│  3 │ ToolSearch      │   0s  │ select:mcp__plugin_abe_abe__debate,…          │
+│  4 │ Write           │   0s  │ csa/pricing.py                                │
 └────┴─────────────────┴───────┴───────────────────────────────────────────────┘
 ```
 
@@ -170,8 +170,8 @@ each run) and the histogram of what it *actually* does in your traces.
 │ triggered 44 tool calls (44.0/turn) · friction in 100% of its turns          │
 │ context weight: loads ~509.2 KB (~130,354 tok, est) each run · 1 load (heavy!)│
 │                                                                              │
-│ What it actually triggers — calls + wall-time to next step                   │
-│ (AskUserQuestion time is mostly waiting on you):                             │
+│ What it actually triggers — calls + tool-execution time                      │
+│ (AskUserQuestion time is you answering):                                     │
 ├───────────────────┬─────────┬─────────┬─────────────────────────────────────┤
 │ tool              │ calls   │ time    │ % of its tool use                   │
 ├───────────────────┼─────────┼─────────┼─────────────────────────────────────┤

@@ -186,6 +186,8 @@ def test_corpus_tool_hist():
 
 
 def test_tool_timing():
+    # ls gets a tool_result at +3 -> exec time 2s (not the 9s gap to `make`).
+    # make has NO result -> falls back to gap-to-next (turn end) = 0s.
     import os
     rows = [
         json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
@@ -193,14 +195,18 @@ def test_tool_timing():
         json.dumps({"type": "assistant", "requestId": "r1",
                     "timestamp": "2026-06-22T10:00:01.000Z",
                     "message": {"role": "assistant", "model": "claude-opus-4-8",
-                                "content": [{"type": "tool_use", "name": "Bash",
-                                             "input": {"command": "ls"}}],
+                                "content": [{"type": "tool_use", "id": "u1",
+                                             "name": "Bash", "input": {"command": "ls"}}],
                                 "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:03.000Z",
+                    "message": {"role": "user",
+                                "content": [{"type": "tool_result", "tool_use_id": "u1",
+                                             "content": "ok"}]}}),
         json.dumps({"type": "assistant", "requestId": "r2",
-                    "timestamp": "2026-06-22T10:00:05.000Z",
+                    "timestamp": "2026-06-22T10:00:10.000Z",
                     "message": {"role": "assistant", "model": "claude-opus-4-8",
-                                "content": [{"type": "tool_use", "name": "Bash",
-                                             "input": {"command": "make"}}],
+                                "content": [{"type": "tool_use", "id": "u2",
+                                             "name": "Bash", "input": {"command": "make"}}],
                                 "usage": {"output_tokens": 5, "input_tokens": 5}}}),
     ]
     f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
@@ -208,11 +214,11 @@ def test_tool_timing():
     f.close()
     s = model.load_session(f.name)
     t = s.turns[0]
-    assert t.tools[0].dur == 4.0          # ls -> make is 4s
-    assert t.tools[1].dur == 0.0          # last call, ends at turn end
+    assert t.tools[0].dur == 2.0          # exec: result(+3) - call(+1), NOT the 9s gap
+    assert t.tools[1].dur == 0.0          # no result, last call -> turn end
     a = model.skill_regret([s])["(none)"]
     assert a["secs"] == t.duration
-    assert a["hist"]["Bash"] == {"calls": 2, "secs": 4.0}
+    assert a["hist"]["Bash"] == {"calls": 2, "secs": 2.0}
     os.unlink(f.name)
 
 

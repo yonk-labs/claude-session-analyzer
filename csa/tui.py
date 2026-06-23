@@ -273,8 +273,8 @@ class TurnScreen(Screen):
                 f"in {human(t.fresh)} / out [b]{human(t.out)}[/b] tok · ctx {t.ctx:,} · "
                 f"[b]${t.cost:,.2f}[/b] · {t.tok_per_s:.0f} tok/s\n"
                 f"skills: {', '.join(sorted(t.skills)) or '-'}\n{fr_line}\n"
-                f"[dim]time = wall-clock to the next step (model think + tool exec + "
-                f"any wait for you)[/dim]\n\n"
+                f"[dim]time = tool-execution latency (result − call); for "
+                f"AskUserQuestion that's you answering[/dim]\n\n"
                 f"[b]prompt[/b]: {prompt[:300]}")
         yield VerticalScroll(Static(head))
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
@@ -399,8 +399,8 @@ class SkillDetailScreen(Screen):
                 f"output tok · triggered [b]{a['tools']}[/b] tool calls "
                 f"({per_turn:.1f}/turn) · friction in {pct:.0f}% of its turns "
                 f"[dim](suspicion)[/dim]{inj_line}{ask_note}\n\n"
-                f"[b]What it actually triggers[/b] — calls + wall-time to next step "
-                f"[dim](AskUserQuestion time is mostly waiting on you)[/dim]:")
+                f"[b]What it actually triggers[/b] — calls + tool-execution time "
+                f"[dim](AskUserQuestion time is you answering)[/dim]:")
         yield Header()
         yield Static(head, id="head")
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
