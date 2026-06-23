@@ -214,11 +214,13 @@ def test_tool_timing():
     f.close()
     s = model.load_session(f.name)
     t = s.turns[0]
-    assert t.tools[0].dur == 2.0          # exec: result(+3) - call(+1), NOT the 9s gap
+    assert t.tools[0].dur == 2.0          # exec: result(+3) - call(+1)
+    assert t.tools[0].wall == 9.0         # wall: call(+1) -> next call(+10)
     assert t.tools[1].dur == 0.0          # no result, last call -> turn end
+    assert t.tools[1].wall == 0.0
     a = model.skill_regret([s])["(none)"]
     assert a["secs"] == t.duration
-    assert a["hist"]["Bash"] == {"calls": 2, "secs": 2.0}
+    assert a["hist"]["Bash"] == {"calls": 2, "secs": 2.0, "wall": 9.0}
     os.unlink(f.name)
 
 

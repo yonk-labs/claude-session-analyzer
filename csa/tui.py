@@ -273,8 +273,8 @@ class TurnScreen(Screen):
                 f"in {human(t.fresh)} / out [b]{human(t.out)}[/b] tok · ctx {t.ctx:,} · "
                 f"[b]${t.cost:,.2f}[/b] · {t.tok_per_s:.0f} tok/s\n"
                 f"skills: {', '.join(sorted(t.skills)) or '-'}\n{fr_line}\n"
-                f"[dim]time = tool-execution latency (result − call); for "
-                f"AskUserQuestion that's you answering[/dim]\n\n"
+                f"[dim]exec = tool run · wall = call→next step · Δ = model think + "
+                f"idle after (AskUserQuestion exec = you answering)[/dim]\n\n"
                 f"[b]prompt[/b]: {prompt[:300]}")
         yield VerticalScroll(Static(head))
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
@@ -283,12 +283,14 @@ class TurnScreen(Screen):
 
     def on_mount(self):
         self.sub_title = f"turn {self.turn.index} commands"
-        self.table.add_columns("#", "tool", "time", "summary")
+        self.table.add_columns("#", "tool", "exec", "wall", "Δ", "summary")
         for i, c in enumerate(self.turn.tools, 1):
             mark = " ✗" if c.is_error else ""
-            self.table.add_row(str(i), c.name + mark, f"{c.dur:.0f}s", c.summary or "")
+            delta = max(0.0, c.wall - c.dur)
+            self.table.add_row(str(i), c.name + mark, f"{c.dur:.0f}s",
+                               f"{c.wall:.0f}s", f"{delta:.0f}s", c.summary or "")
         if not self.turn.tools:
-            self.table.add_row("-", "(no tool calls)", "", "")
+            self.table.add_row("-", "(no tool calls)", "", "", "", "")
 
 
 # --------------------------------------------------------------------------- #
@@ -399,8 +401,9 @@ class SkillDetailScreen(Screen):
                 f"output tok · triggered [b]{a['tools']}[/b] tool calls "
                 f"({per_turn:.1f}/turn) · friction in {pct:.0f}% of its turns "
                 f"[dim](suspicion)[/dim]{inj_line}{ask_note}\n\n"
-                f"[b]What it actually triggers[/b] — calls + tool-execution time "
-                f"[dim](AskUserQuestion time is you answering)[/dim]:")
+                f"[b]What it actually triggers[/b] — calls · exec vs wall "
+                f"[dim](wall−exec = model think after; AskUserQuestion exec = "
+                f"you answering)[/dim]:")
         yield Header()
         yield Static(head, id="head")
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
@@ -409,15 +412,16 @@ class SkillDetailScreen(Screen):
 
     def on_mount(self):
         self.sub_title = "what this skill really does"
-        self.table.add_columns("tool", "calls", "time", "% of its tool use")
+        self.table.add_columns("tool", "calls", "exec", "wall", "% of its tool use")
         hist = self.data["hist"]
         total = sum(h["calls"] for h in hist.values()) or 1
         for name, h in sorted(hist.items(), key=lambda kv: kv[1]["calls"],
                               reverse=True):
             self.table.add_row(name, str(h["calls"]), f"{h['secs']:.0f}s",
+                               f"{h.get('wall', 0):.0f}s",
                                f"{100 * h['calls'] / total:.0f}%")
         if not self.data["hist"]:
-            self.table.add_row("(no tool calls)", "0", "0s", "-")
+            self.table.add_row("(no tool calls)", "0", "0s", "0s", "-")
 
 
 # --------------------------------------------------------------------------- #

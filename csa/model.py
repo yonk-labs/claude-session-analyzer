@@ -74,6 +74,7 @@ class ToolCall:
     ts: datetime = None
     is_error: bool = False
     dur: float = 0.0          # tool-exec seconds: result_ts - call_ts (else gap fallback)
+    wall: float = 0.0         # call_ts -> next step: exec + model-think/idle after
     uid: str = ""             # tool_use id, to match its tool_result
 
 
@@ -310,12 +311,10 @@ def _finalize(turn, tool_counts, result_ts):
     # waiting for you IS what the tool does. Fall back to gap-to-next only when a
     # tool has no recorded result (e.g. an interrupted final call).
     for i, c in enumerate(turn.tools):
+        nxt = turn.tools[i + 1].ts if i + 1 < len(turn.tools) else turn.end
+        c.wall = max(0.0, (nxt - c.ts).total_seconds()) if c.ts and nxt else 0.0
         res = result_ts.get(c.uid)
-        if res and c.ts:
-            c.dur = max(0.0, (res - c.ts).total_seconds())
-        else:
-            nxt = turn.tools[i + 1].ts if i + 1 < len(turn.tools) else turn.end
-            c.dur = max(0.0, (nxt - c.ts).total_seconds()) if c.ts and nxt else 0.0
+        c.dur = max(0.0, (res - c.ts).total_seconds()) if res and c.ts else c.wall
 
 
 def _session_key(path):
@@ -449,9 +448,11 @@ def scan_skill_regret(root, progress=None):
                 for k, v in a.items():
                     if k == "hist":
                         for nm, hc in v.items():
-                            bh = b["hist"].setdefault(nm, {"calls": 0, "secs": 0.0})
+                            bh = b["hist"].setdefault(
+                                nm, {"calls": 0, "secs": 0.0, "wall": 0.0})
                             bh["calls"] += hc["calls"]
                             bh["secs"] += hc["secs"]
+                            bh["wall"] += hc.get("wall", 0.0)
                     else:
                         b[k] += v
         if progress:
@@ -485,9 +486,11 @@ def skill_regret(sessions):
                 a["asks"] += asks
                 a["secs"] += t.duration
                 for c in t.tools:
-                    h = a["hist"].setdefault(c.name, {"calls": 0, "secs": 0.0})
+                    h = a["hist"].setdefault(c.name,
+                                             {"calls": 0, "secs": 0.0, "wall": 0.0})
                     h["calls"] += 1
-                    h["secs"] += c.dur
+                    h["secs"] += c.dur     # exec time
+                    h["wall"] += c.wall    # call -> next step
                 if t.friction:
                     a["regret_out"] += t.out
                     a["regret_turns"] += 1

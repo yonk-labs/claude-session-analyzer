@@ -123,17 +123,21 @@ walked itself back · **E**=2+ tool errors · **L**=retried the same command.
 │ Turn 3 · gap 117s · dur 1217s · in 1.9k / out 64.2k tok · ctx 384,334 · $9.96 │
 │ skills: claude-api                                                            │
 │ friction (suspicion, not proof): 2 tool-error(s), tool-loop                   │
-│ time = tool-execution latency (result − call); AskUserQuestion = you answering │
+│ exec = tool run · wall = call→next step · Δ = model think + idle after         │
 │                                                                               │
 │ prompt: current pricing per million tokens for Opus 4.x, Sonnet 4.x…          │
-├────┬─────────────────┬───────┬───────────────────────────────────────────────┤
-│  # │ tool            │ time  │ summary                                       │
-├────┼─────────────────┼───────┼───────────────────────────────────────────────┤
-│  1 │ Skill           │   3s  │ claude-api                                    │
-│  2 │ Bash            │   8s  │ time python3 profile.py --top 15              │
-│  3 │ ToolSearch      │   0s  │ select:mcp__plugin_abe_abe__debate,…          │
-│  4 │ Write           │   0s  │ csa/pricing.py                                │
-└────┴─────────────────┴───────┴───────────────────────────────────────────────┘
+├────┬─────────────┬──────┬──────┬──────┬─────────────────────────────────────┤
+│  # │ tool        │ exec │ wall │  Δ   │ summary                             │
+├────┼─────────────┼──────┼──────┼──────┼─────────────────────────────────────┤
+│  1 │ Skill       │   3s │  46s │  43s │ claude-api                          │
+│  2 │ Bash        │   8s │  40s │  32s │ time python3 profile.py --top 15    │
+│  3 │ ToolSearch  │   0s │  29s │  29s │ select:mcp__plugin_abe_abe__debate… │
+│  4 │ Write       │   0s │  25s │  25s │ csa/pricing.py                      │
+└────┴─────────────┴──────┴──────┴──────┴─────────────────────────────────────┘
+
+The Δ column is the quiet one: `time python3 profile.py` *ran* 8s, but the model
+then *thought* 32s before its next move. Instant tools (Write, ToolSearch) with a
+big Δ are pure think time you'd never have seen.
 ```
 
 ### 4 · Skill regret — which skill is slowing you down (`s`)
@@ -170,16 +174,16 @@ each run) and the histogram of what it *actually* does in your traces.
 │ triggered 44 tool calls (44.0/turn) · friction in 100% of its turns          │
 │ context weight: loads ~509.2 KB (~130,354 tok, est) each run · 1 load (heavy!)│
 │                                                                              │
-│ What it actually triggers — calls + tool-execution time                      │
-│ (AskUserQuestion time is you answering):                                     │
-├───────────────────┬─────────┬─────────┬─────────────────────────────────────┤
-│ tool              │ calls   │ time    │ % of its tool use                   │
-├───────────────────┼─────────┼─────────┼─────────────────────────────────────┤
-│ Bash              │   26    │   7m    │ 59%                                 │
-│ Edit              │    9    │   3m    │ 20%                                 │
-│ Write             │    5    │   2m    │ 11%                                 │
-│ Read              │    4    │   1m    │ 9%                                  │
-└───────────────────┴─────────┴─────────┴─────────────────────────────────────┘
+│ What it actually triggers — calls · exec vs wall                             │
+│ (wall−exec = model think after; AskUserQuestion exec = you answering):        │
+├─────────────────┬───────┬───────┬───────┬───────────────────────────────────┤
+│ tool            │ calls │ exec  │ wall  │ % of its tool use                 │
+├─────────────────┼───────┼───────┼───────┼───────────────────────────────────┤
+│ Bash            │   26  │   7m  │  22m  │ 59%                               │
+│ Edit            │    9  │   0m  │   4m  │ 20%                               │
+│ Write           │    5  │   0m  │   2m  │ 11%                               │
+│ Read            │    4  │   0m  │   1m  │ 9%                                │
+└─────────────────┴───────┴───────┴───────┴───────────────────────────────────┘
 ```
 
 > This is the payoff: `claude-api` silently loads ~130k tokens of reference doc

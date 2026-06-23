@@ -194,7 +194,9 @@ Opened by selecting a turn. The deepest level: what actually happened.
 |---|---|
 | `#` | Order within the turn. |
 | `tool` | Tool name. A `✗` marks a tool result that errored. |
-| `time` | **Tool-execution latency**: the result's timestamp minus the call's — the actual time the call took (a Bash command's run time, a subagent's run, a server tool's round-trip). For `AskUserQuestion` it's *your* answer time, since waiting for you is what that tool does. |
+| `exec` | **Tool-execution latency** (result timestamp − call timestamp): the actual time the call took — a Bash command's run time, a subagent's run, a server tool's round-trip. For `AskUserQuestion` it's *your* answer time. |
+| `wall` | Wall-clock from this call to the next step (exec **plus** whatever happened after it). |
+| `Δ` | `wall − exec` — the model's thinking and any idle *after* the tool returned. A big Δ on an instant tool (Write, ToolSearch) is pure think time you'd otherwise never see. |
 | `summary` | One-line summary of the call (the command, file path, query, or skill name). |
 
 This is where you see, concretely, what a turn spent its time and tokens on — and
@@ -251,7 +253,8 @@ and what does it actually do?**
 |---|---|
 | `tool` | Tool name. |
 | `calls` | How many times this skill triggered it. |
-| `time` | Total tool-execution time in that tool across the skill's turns (sum of result−call latencies). `AskUserQuestion` time is *you* answering — honest, since that's the tool's whole job. Use it to spot which tools a skill genuinely spends time *running* (Bash, subagents, server tools) vs. instant ones (Edit, Read). |
+| `exec` | Total tool-execution time in that tool across the skill's turns (sum of result−call latencies). `AskUserQuestion` exec is *you* answering. Use it to spot which tools a skill genuinely spends time *running* (Bash, subagents, server tools) vs. instant ones (Edit, Read). |
+| `wall` | Total call→next-step time. `wall − exec` ≈ how much model *thinking* the skill does around that tool — e.g. lots of Bash calls each followed by long reasoning. |
 | `% of its tool use` | Share of the skill's total tool calls. |
 
 A skill's advertised behavior and its real behavior can differ. This table is the
