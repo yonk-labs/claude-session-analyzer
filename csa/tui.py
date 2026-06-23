@@ -10,6 +10,7 @@ Drill-down screens, each an aggregation of the same parsed model:
 Honest labels (abe review): tok/s is END-TO-END throughput, not decode speed;
 friction/regret is suspicion, not proof of harm.
 """
+import json
 from datetime import datetime
 
 from textual import work
@@ -259,6 +260,7 @@ class BrowserScreen(Sortable, Screen):
 # --------------------------------------------------------------------------- #
 class SessionScreen(Sortable, Screen):
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit"),
+                ("g", "graphs", "Stats ⇄ graphs"),
                 ("a", "all_turns", "All turns"), ("t", "tools", "Tools")]
     COLS = [
         ("#", lambda t: t.index, False),
@@ -271,6 +273,7 @@ class SessionScreen(Sortable, Screen):
         ("tools", lambda t: len(t.tools), True),
         ("fric", lambda t: t.friction, True),
         ("skills", lambda t: ",".join(sorted(t.skills)), False),
+        ("prompt", lambda t: t.prompt or "", False),
     ]
 
     def __init__(self, summary):
@@ -280,12 +283,15 @@ class SessionScreen(Sortable, Screen):
         self.all_turns, self.view = [], []
         self.bkts = []
         self.sort_i, self.sort_rev = 0, False
-        self.filter = None  # (lo, hi) seconds, or None
+        self.filter = None        # (lo, hi) seconds, or None
+        self.show_graphs = False  # stats panel is the default; g toggles graphs
 
     def compose(self):
         yield Header()
         self.head = Static("Loading session…", id="head")
         yield self.head
+        self.panel = Static("", id="panel")
+        yield self.panel
         self.bkt_table = DataTable(cursor_type="row", zebra_stripes=True, id="buckets")
         yield self.bkt_table
         self.turn_table = DataTable(cursor_type="row", zebra_stripes=True, id="turns")
@@ -293,8 +299,9 @@ class SessionScreen(Sortable, Screen):
         yield Footer()
 
     def on_mount(self):
-        self.bkt_table.add_columns("time", "tokens", "spend", "turns")
+        self.bkt_table.add_columns("when", "tokens", "spend", "turns")
         self.turn_table.add_columns(*[c[0] for c in self.COLS])
+        self.bkt_table.display = False     # start on the stats panel; g toggles
         self.sub_title = short_proj(self.summary.project, 40)
         self.load_session()
 
@@ -312,10 +319,35 @@ class SessionScreen(Sortable, Screen):
         self.head.update(
             f"[b]{s.session_id[:8]}[/b] · {s.model or '?'} · {len(s.turns)} turns · "
             f"out {human(s.out)} · peak-ctx [b]{s.ctx_peak:,}[/b] · "
-            f"[b]${s.cost:,.2f}[/b]{flag} · {s.tok_per_s:.0f} tok/s (end-to-end) · "
-            f"[dim]click a bucket below to filter turns · a=all[/dim]")
+            f"[b]${s.cost:,.2f}[/b]{flag} · {s.tok_per_s:.0f} tok/s · "
+            f"[dim]g=stats⇄graphs · a=all turns · Enter a turn for its commands[/dim]")
+        self.panel.update(self._panel_text())
         self._fill_buckets()
         self._fill_turns()
+
+    def _panel_text(self):
+        s, st = self.session, self.session.stats()
+        skills = sorted(st["skills"].items(), key=lambda kv: -kv[1])
+        sk_str = ", ".join(f"{k.split(':')[-1]}×{v}" for k, v in skills[:8]) or "none"
+        return "\n".join([
+            f"[b]started[/b] {when(s.start)}    [b]ended[/b] {when(s.end)}    "
+            f"([b]{s.wall / 60:.0f}m[/b] elapsed wall-clock)",
+            "",
+            f"[b]turns[/b] {st['turns']}   [b]tool calls[/b] {st['tools']}   "
+            f"[b]skill loads[/b] {st['skill_calls']}   [b]MCP calls[/b] {st['mcp']}   "
+            f"[b]subagents[/b] {st['subagents']}   [b]asked you[/b] {st['asks']}",
+            "",
+            f"[yellow]friction[/yellow] {st['friction_turns']}/{st['turns']} turns  ·  "
+            f"corrections {st['corrections']}  ·  self-corrections "
+            f"{st['self_corrections']}  ·  error-turns {st['error_turns']} "
+            f"({st['tool_errors']} tool errors)  ·  retry-loops {st['loops']}  "
+            f"[dim](suspicion, not proof)[/dim]",
+            "",
+            f"[b]skills used[/b]: {sk_str}",
+            "",
+            "[dim]press [b]g[/b] for the time-bucketed graphs · [b]t[/b] for the tools "
+            "histogram · Enter a turn below to drill in[/dim]",
+        ])
 
     def _fill_buckets(self):
         b = self.bkts
@@ -325,7 +357,7 @@ class SessionScreen(Sortable, Screen):
         self.bkt_table.clear()
         for i, x in enumerate(b):
             self.bkt_table.add_row(
-                x["label"],
+                x["at"].strftime("%m-%d %H:%M"),
                 f"{_bar(x['tok'], mt)} {human(x['tok'])}",
                 f"{_bar(x['cost'], mc)} ${x['cost']:.2f}",
                 f"{_bar(x['turns'], mn)} {x['turns']}",
@@ -344,7 +376,12 @@ class SessionScreen(Sortable, Screen):
             self.turn_table.add_row(
                 str(t.index), f"{t.gap:.0f}s", f"{t.duration:.0f}s", human(t.out),
                 human(t.ctx), f"${t.cost:,.2f}", f"{t.tok_per_s:.0f}",
-                str(len(t.tools)), fr, sk[:30], key=str(i))
+                str(len(t.tools)), fr, sk[:22], (t.prompt or "")[:64], key=str(i))
+
+    def action_graphs(self):
+        self.show_graphs = not self.show_graphs
+        self.panel.display = not self.show_graphs
+        self.bkt_table.display = self.show_graphs
 
     def action_all_turns(self):
         self.filter = None
@@ -376,7 +413,8 @@ class SessionScreen(Sortable, Screen):
             self.view = [t for t in self.all_turns
                          if x["lo"] <= (t.start - base).total_seconds() < x["hi"]]
             self.filter = (x["lo"], x["hi"])
-            self.sub_title = f"{short_proj(self.summary.project, 30)} · {x['label']} ({len(self.view)} turns)"
+            self.sub_title = (f"{short_proj(self.summary.project, 26)} · "
+                              f"{x['at'].strftime('%m-%d %H:%M')} ({len(self.view)} turns)")
             self._fill_turns()
         else:
             self.app.push_screen(TurnScreen(self.session, self.view[int(e.row_key.value)]))
@@ -406,7 +444,8 @@ class TurnScreen(Screen):
                 f"[b]${t.cost:,.2f}[/b] · {t.tok_per_s:.0f} tok/s\n"
                 f"skills: {', '.join(sorted(t.skills)) or '-'}\n{fr_line}\n"
                 f"[dim]exec = tool run · wall = call→next step · Δ = model think + "
-                f"idle after (AskUserQuestion exec = you answering)[/dim]\n\n"
+                f"idle after (AskUserQuestion exec = you answering) · "
+                f"Enter a command to see its full input + result[/dim]\n\n"
                 f"[b]prompt[/b]: {prompt[:300]}")
         yield VerticalScroll(Static(head))
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
@@ -416,13 +455,50 @@ class TurnScreen(Screen):
     def on_mount(self):
         self.sub_title = f"turn {self.turn.index} commands"
         self.table.add_columns("#", "tool", "exec", "wall", "Δ", "summary")
-        for i, c in enumerate(self.turn.tools, 1):
+        for i, c in enumerate(self.turn.tools):
             mark = " ✗" if c.is_error else ""
             delta = max(0.0, c.wall - c.dur)
-            self.table.add_row(str(i), c.name + mark, f"{c.dur:.0f}s",
-                               f"{c.wall:.0f}s", f"{delta:.0f}s", c.summary or "")
+            self.table.add_row(str(i + 1), c.name + mark, f"{c.dur:.0f}s",
+                               f"{c.wall:.0f}s", f"{delta:.0f}s", c.summary or "",
+                               key=str(i))
         if not self.turn.tools:
             self.table.add_row("-", "(no tool calls)", "", "", "", "")
+
+    def on_data_table_row_selected(self, e):
+        if e.row_key.value is None:
+            return
+        idx = int(e.row_key.value)
+        if 0 <= idx < len(self.turn.tools):
+            self.app.push_screen(StepScreen(self.turn.tools[idx]))
+
+
+# --------------------------------------------------------------------------- #
+class StepScreen(Screen):
+    """Full detail of one command/step: its complete input and (capped) result."""
+    BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
+
+    def __init__(self, call):
+        super().__init__()
+        self.call = call
+
+    def compose(self):
+        c = self.call
+        err = " [red]✗ error[/red]" if c.is_error else ""
+        head = (f"[b]{c.name}[/b]{err} · exec [b]{c.dur:.0f}s[/b] · wall {c.wall:.0f}s "
+                f"· Δ {max(0.0, c.wall - c.dur):.0f}s")
+        try:
+            inp = json.dumps(c.input, indent=2, ensure_ascii=False) if c.input else "(no input)"
+        except (TypeError, ValueError):
+            inp = str(c.input)
+        body = (f"INPUT\n{'─' * 60}\n{inp[:8000]}\n\n"
+                f"RESULT  (capped)\n{'─' * 60}\n{c.result or '(no result captured)'}")
+        yield Header()
+        yield Static(head, id="head")
+        yield VerticalScroll(Static(body, markup=False, id="step"))
+        yield Footer()
+
+    def on_mount(self):
+        self.sub_title = f"{self.call.name} — full step"
 
 
 # --------------------------------------------------------------------------- #
@@ -607,7 +683,9 @@ class ClaudeTraceApp(App):
     CSS = """
     #status { height: auto; color: $text-muted; padding: 0 1; }
     #head { height: auto; padding: 0 1; }
-    #buckets { height: 38%; border-bottom: solid $primary; }
+    #panel { height: auto; padding: 1 1; border-bottom: solid $primary; }
+    #step { padding: 0 1; }
+    #buckets { height: 40%; border-bottom: solid $primary; }
     DataTable { height: 1fr; }
     """
     TITLE = "csa"

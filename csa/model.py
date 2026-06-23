@@ -83,6 +83,22 @@ def _tool_summary(inp, limit=60):
     return ",".join(sorted(inp.keys()))[:limit]
 
 
+def _result_text(blk, limit=6000):
+    """Readable text of a tool_result block (capped)."""
+    c = blk.get("content")
+    if isinstance(c, str):
+        return c[:limit]
+    if isinstance(c, list):
+        parts = []
+        for b in c:
+            if isinstance(b, dict) and b.get("type") == "text":
+                parts.append(b.get("text", ""))
+            elif isinstance(b, str):
+                parts.append(b)
+        return "\n".join(parts)[:limit]
+    return ""
+
+
 @dataclass
 class ToolCall:
     name: str
@@ -92,6 +108,8 @@ class ToolCall:
     dur: float = 0.0          # tool-exec seconds: result_ts - call_ts (else gap fallback)
     wall: float = 0.0         # call_ts -> next step: exec + model-think/idle after
     uid: str = ""             # tool_use id, to match its tool_result
+    input: dict = None        # full tool input (for the step drill-in)
+    result: str = ""          # tool_result text (capped), for the step drill-in
 
 
 @dataclass
@@ -192,10 +210,37 @@ class Session:
             rows[i]["turns"] += 1
         out = []
         for i, row in enumerate(rows):
-            mins = int(i * seconds // 60)
-            out.append({"label": f"+{mins}m", "lo": i * seconds,
-                    "hi": (i + 1) * seconds, **row})
+            at = base + timedelta(seconds=i * seconds)
+            out.append({"label": f"+{int(i * seconds // 60)}m", "at": at,
+                        "lo": i * seconds, "hi": (i + 1) * seconds, **row})
         return out
+
+    def stats(self):
+        """Control-panel rollup for the session screen."""
+        ts = self.turns
+
+        def calls(name):
+            return sum(1 for t in ts for c in t.tools if c.name == name)
+
+        skills = {}
+        for t in ts:
+            for sk in t.skills:
+                skills[sk] = skills.get(sk, 0) + 1
+        return {
+            "turns": len(ts),
+            "tools": sum(len(t.tools) for t in ts),
+            "mcp": sum(1 for t in ts for c in t.tools if c.name.startswith("mcp__")),
+            "asks": calls("AskUserQuestion"),
+            "skill_calls": calls("Skill"),
+            "skills": skills,                                   # skill -> turns
+            "subagents": calls("Agent") + calls("Task"),
+            "friction_turns": sum(1 for t in ts if t.friction),
+            "corrections": sum(1 for t in ts if t.correction),
+            "self_corrections": sum(1 for t in ts if t.self_correct),
+            "error_turns": sum(1 for t in ts if t.tool_errors >= 2),
+            "tool_errors": sum(t.tool_errors for t in ts),
+            "loops": sum(1 for t in ts if t.looped),
+        }
 
 
 def _nice_bucket(secs):
@@ -232,6 +277,7 @@ def load_session(path):
     turns, cur, seen = [], None, set()
     tool_counts = {}
     result_ts = {}         # tool_use_id -> when its result came back (per turn)
+    tool_by_uid = {}       # tool_use_id -> ToolCall, to attach its result text
     pending_skill = None   # set when a Skill tool fires; claims the next text block
     for r in recs:
         if _is_user_prompt(r):
@@ -261,8 +307,11 @@ def load_session(path):
                 if blk.get("type") == "tool_use":
                     name = blk.get("name", "?")
                     summ = _tool_summary(blk.get("input"))
-                    cur.tools.append(ToolCall(name, summ, _ts(r.get("timestamp")),
-                                              uid=blk.get("id", "")))
+                    tc = ToolCall(name, summ, _ts(r.get("timestamp")),
+                                  uid=blk.get("id", ""), input=blk.get("input"))
+                    cur.tools.append(tc)
+                    if tc.uid:
+                        tool_by_uid[tc.uid] = tc
                     # loop = the SAME (tool, input) repeated, i.e. a retry — not
                     # just "used Bash a lot" (that's normal agentic work).
                     k = (name, summ)
@@ -297,6 +346,9 @@ def load_session(path):
                         rid = blk.get("tool_use_id")
                         if rid:
                             result_ts[rid] = _ts(r.get("timestamp"))
+                            tc = tool_by_uid.get(rid)
+                            if tc is not None:
+                                tc.result = _result_text(blk)
                         if blk.get("is_error"):
                             cur.tool_errors += 1
                     elif blk.get("type") == "text" and pending_skill:

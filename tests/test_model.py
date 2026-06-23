@@ -224,6 +224,21 @@ def test_tool_timing():
     os.unlink(f.name)
 
 
+def test_stats_and_capture():
+    s = model.load_session(_fixture())
+    st = s.stats()
+    assert st["turns"] == 2 and st["tools"] == 2          # 2 Bash calls
+    assert st["skill_calls"] == 0 and st["mcp"] == 0
+    assert st["error_turns"] == 0                          # 1 error < 2 -> not a turn
+    assert st["friction_turns"] == 1                       # turn-1 correction
+    assert "superpowers:brainstorming" in st["skills"]
+    # buckets carry an absolute clock time
+    b = s.buckets()
+    assert b[0]["at"] is not None
+    # each command captured its full input
+    assert s.turns[0].tools[0].input == {"command": "ls -la"}
+
+
 def test_project_helpers():
     import os
     assert model.slugify_path("/home/u/my_app") == "-home-u-my-app"

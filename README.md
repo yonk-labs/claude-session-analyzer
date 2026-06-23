@@ -109,29 +109,44 @@ sessions.) Sample data below is illustrative.
   Enter open · s skills · t tools · q quit
 ```
 
-### 3 · Session — bucketed bars + sortable turns
+### 3 · Session — control panel + sortable turns
 
-The bar table is your spike-finder. **Click a bucket to filter the turns below to
-that time window** (`a` clears).
+Opens on a **control panel** of session stats — friction, skill loads, MCP calls,
+how often it asked you, and more. Press **`g`** to swap it for the time-bucketed
+bar graphs. The turns table (now with the **prompt** of each turn) is always below.
 
 ```
-┌ acme-api ───────────────────────────────────────────────────────────────────┐
+┌ ~/acme-api ─────────────────────────────────────────────────────────────────┐
 │ 3f9c0e1a · opus-4-8 · 225 turns · out 2.9M · peak-ctx 358,958 · $612.40       │
-│ 6.3 tok/s (end-to-end) · click a bucket below to filter turns · a=all         │
-├───────┬──────────────────┬─────────────────┬───────────────────┬─────────────┤
-│ time  │ tokens           │ spend           │ turns             │             │
-├───────┼──────────────────┼─────────────────┼───────────────────┼─────────────┤
-│ +0m   │ ████████ 412k    │ ██████ $88.10   │ ██████████ 41     │             │
-│ +1d   │ ██ 96k           │ █ $14.20        │ ███ 12            │             │
-│ +2d   │ ██████████ 511k  │ ██████████ $140 │ █████ 22          │  ← spike    │
-├───────┴──────────────────┴─────────────────┴───────────────────┴─────────────┤
-│  # │ gap   │ dur   │   out │     ctx │      $ │ t/s │ tools │ fric │ skills    │
-├────┼───────┼───────┼───────┼─────────┼────────┼─────┼───────┼──────┼───────────┤
-│  1 │   0s  │ 726s  │ 29.1k │  92,008 │  $2.09 │  40 │   12  │  S·  │ brainstorm│
-│  2 │ 599s  │  95s  │  6.1k │  96,894 │  $0.20 │  65 │    0  │   ·  │ -         │
-│  3 │ 117s  │1217s  │ 64.2k │ 384,334 │  $9.96 │  53 │   44  │ ·EL  │ claude-api│
-└────┴───────┴───────┴───────┴─────────┴────────┴─────┴───────┴──────┴───────────┘
-  Enter drill into a turn · t tools · a all turns · Esc back · q quit
+│ 6.3 tok/s · g=stats⇄graphs · a=all turns · Enter a turn for its commands      │
+├───────────────────────────────────────────────────────────────────────────────┤
+│ started 2026-06-18 09:14   ended 2026-06-21 17:40   (7740m elapsed wall-clock) │
+│                                                                                │
+│ turns 225   tool calls 1840   skill loads 12   MCP calls 47   subagents 9      │
+│   asked you 6                                                                  │
+│                                                                                │
+│ friction 41/225 turns · corrections 7 · self-corrections 12 · error-turns 5    │
+│   (18 tool errors) · retry-loops 9   (suspicion, not proof)                    │
+│                                                                                │
+│ skills used: brainstorming×4, writing-plans×3, test-driven-development×2, …     │
+├────┬──────┬──────┬───────┬─────────┬───────┬─────┬──────┬──────┬───────────────┤
+│  # │ gap  │ dur  │   out │     ctx │     $ │ t/s │ tools│ fric │ prompt        │
+├────┼──────┼──────┼───────┼─────────┼───────┼─────┼──────┼──────┼───────────────┤
+│  1 │   0s │ 726s │ 29.1k │  92,008 │ $2.09 │  40 │  12  │  S·  │ Build the …   │
+│  2 │ 599s │  95s │  6.1k │  96,894 │ $0.20 │  65 │   0  │   ·  │ Also add …    │
+│  3 │ 117s │1217s │ 64.2k │ 384,334 │ $9.96 │  53 │  44  │ ·EL  │ current pri…  │
+└────┴──────┴──────┴───────┴─────────┴───────┴─────┴──────┴──────┴───────────────┘
+  g graphs · Enter a turn · t tools · a all · Esc back · q quit
+```
+
+Press **`g`** for the bar graphs. Each row is a **real clock-time bucket** (no more
+"+120m" mystery) — click a bucket to filter the turns below to that window:
+
+```
+│ when         │ tokens          │ spend          │ turns            │
+│ 06-18 09:14  │ ████████ 412k   │ ██████ $88.10  │ ██████████ 41    │
+│ 06-19 09:14  │ ██ 96k          │ █ $14.20       │ ███ 12           │
+│ 06-20 09:14  │ ██████████ 511k │ ███████ $140   │ █████ 22  ←spike │
 ```
 
 `fric` flags (suspicion, not proof): **C**=you corrected it next · **S**=it
@@ -155,10 +170,31 @@ walked itself back · **E**=2+ tool errors · **L**=retried the same command.
 │  3 │ ToolSearch  │   0s │  29s │  29s │ select:mcp__plugin_abe_abe__debate… │
 │  4 │ Write       │   0s │  25s │  25s │ csa/pricing.py                      │
 └────┴─────────────┴──────┴──────┴──────┴─────────────────────────────────────┘
+```
 
 The Δ column is the quiet one: `time python3 profile.py` *ran* 8s, but the model
 then *thought* 32s before its next move. Instant tools (Write, ToolSearch) with a
 big Δ are pure think time you'd never have seen.
+
+**Press Enter on any command** to open its full step — the complete tool input
+(the whole Bash command, the full file written, the entire prompt to a subagent)
+plus the captured result:
+
+```
+┌ Bash — full step ───────────────────────────────────────────────────────────┐
+│ Bash · exec 8s · wall 40s · Δ 32s                                             │
+│                                                                               │
+│ INPUT                                                                         │
+│ ────────────────────────────────────────────────────────────                 │
+│ {                                                                             │
+│   "command": "time python3 profile.py --top 15",                              │
+│   "description": "Run full usage profile across all transcripts"              │
+│ }                                                                             │
+│                                                                               │
+│ RESULT  (capped)                                                              │
+│ ────────────────────────────────────────────────────────────                 │
+│ USAGE PROFILE  (1,240 sessions under ~/.claude/projects) …                    │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 5 · Skill regret — which skill is slowing you down (`s`)

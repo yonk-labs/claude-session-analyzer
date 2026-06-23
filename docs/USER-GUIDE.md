@@ -146,30 +146,40 @@ tools (scoped to this list) · `Esc` back to Projects · `q` quit.
 
 ## Screen — Session
 
-Opened by selecting a session. Two stacked tables under a summary header.
+Opened by selecting a session. A summary header, a **control panel** (default) or
+the **time graphs** (toggle with `g`), and the turns table below.
 
 ### Header line
 
-`<id8> · <model> · <N> turns · out <tok> · peak-ctx <tok> · $<cost> · <tok/s>
-tok/s (end-to-end)`. **peak-ctx** is the largest single-request context the
-session ever sent — your high-water mark for how full the window got.
+`<id8> · <model> · <N> turns · out <tok> · peak-ctx <tok> · $<cost> · <tok/s>`.
+**peak-ctx** is the largest single-request context the session ever sent — your
+high-water mark for how full the window got.
 
-### Bucket bar table (top)
+### Control panel (default top region)
 
-The session's timeline, binned into time buckets, rendered as inline bar charts.
+The session at a glance:
 
-- Three metrics per bucket: **tokens**, **spend**, **turns**, each a `█` bar
-  scaled to that metric's max across buckets — so **spikes are obvious**.
-- **Bucket size auto-scales** to give roughly 24 bars across the session (30s for
-  a short session, up to 1 day for one that spans a week).
-- **Click a bucket row to filter** the turns table below to just that time window.
-  The screen subtitle shows the active filter. Press **`a`** to clear it and show
-  all turns again.
+- **start / end / elapsed** wall-clock times (real timestamps).
+- **turns · tool calls · skill loads · MCP calls · subagents · asked you** — the
+  activity profile. "asked you" is `AskUserQuestion` count; "skill loads" is how
+  many times a skill was invoked; "MCP calls" counts `mcp__…` tools.
+- **friction line** — turns flagged, broken down into corrections,
+  self-corrections, error-turns (with total tool errors), and retry-loops.
+  Labeled *suspicion, not proof*.
+- **skills used** — which skills ran, with a count of turns each.
 
-### Turns table (bottom)
+### Time graphs (press `g`)
 
-Every turn (or the filtered subset). **Default order is chronological**; click any
-header to sort.
+Toggles the top region to the bucketed bar charts. Each row is a **real
+clock-time bucket** (e.g. `06-18 09:14`) — no more "+120m" offsets. Three metrics
+per bucket (**tokens / spend / turns**), each a `█` bar scaled to its max so
+**spikes are obvious**. Bucket size auto-scales to ~24 buckets across the session.
+**Click a bucket to filter** the turns table to that window; press **`a`** to clear.
+
+### Turns table (always below)
+
+Every turn (or the filtered subset). **Default order is chronological**; sort with
+`1`–`9` or a header click.
 
 | Column | Meaning |
 |---|---|
@@ -183,6 +193,7 @@ header to sort.
 | `tools` | Number of tool calls in the turn. |
 | `fric` | Friction flags (see below). `·` = none. |
 | `skills` | Skills attributed to the turn. |
+| `prompt` | The start of the user prompt that began the turn — so you can see *what the turn was doing* at a glance. |
 
 **Friction flags** (`fric`) — suspicion, not proof:
 
@@ -193,8 +204,8 @@ header to sort.
 | `E` | **≥2** tool errors in the turn (one alone is normal — a grep miss, a test that fails by design). |
 | `L` | A **retry loop** — the same tool with identical arguments called 3+ times. |
 
-**Keys:** `Enter` open turn detail · **`t`** this session's tools view · **`a`**
-show all turns (clear filter) · `Esc` back · `q` quit.
+**Keys:** `Enter` open turn detail · **`g`** stats ⇄ time graphs · **`t`** this
+session's tools view · **`a`** show all turns (clear filter) · `Esc` back · `q` quit.
 
 ---
 
@@ -219,6 +230,15 @@ Opened by selecting a turn. The deepest level: what actually happened.
 
 This is where you see, concretely, what a turn spent its time and tokens on — and
 which single command ate the clock.
+
+### Step detail — press Enter on a command
+
+Selecting a command opens its **full step**: a header with the tool name and its
+exec/wall/Δ timing, then the **complete input** (the whole Bash command, the full
+file text written, the entire prompt handed to a subagent — pretty-printed JSON)
+and the **captured result** (capped). This is the bottom of the drill-down: from
+projects → sessions → a session → a turn → a single command's exact input and
+output. `Esc` returns to the commands list.
 
 ---
 
