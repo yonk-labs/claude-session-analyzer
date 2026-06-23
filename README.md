@@ -255,4 +255,4 @@ flagged `(est.)`. Edit `claude_trace/pricing.py` when rates change.
 
 ## License
 
-MIT © 2026 yonk-labs
+Apache-2.0 © 2026 yonk-labs

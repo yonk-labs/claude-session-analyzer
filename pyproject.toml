@@ -2,6 +2,7 @@
 name = "claude-trace"
 version = "0.1.0"
 description = "Understand your Claude Code usage: token/cost/time analysis and a TUI over local JSONL transcripts."
+license = "Apache-2.0"
 requires-python = ">=3.10"
 dependencies = ["textual>=8"]
 
