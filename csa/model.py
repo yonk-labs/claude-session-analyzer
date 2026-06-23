@@ -73,6 +73,7 @@ class ToolCall:
     summary: str
     ts: datetime = None
     is_error: bool = False
+    dur: float = 0.0          # seconds until the next call / turn end
 
 
 @dataclass
@@ -295,6 +296,12 @@ def load_session(path):
 
 def _finalize(turn, tool_counts):
     turn.looped = any(c >= 3 for c in tool_counts.values())
+    # per-command duration = gap to the next command (or turn end). Captures
+    # model-think + tool-exec between calls; the only timing the trace exposes.
+    for i, c in enumerate(turn.tools):
+        nxt = turn.tools[i + 1].ts if i + 1 < len(turn.tools) else turn.end
+        if c.ts and nxt:
+            c.dur = max(0.0, (nxt - c.ts).total_seconds())
 
 
 def _session_key(path):
@@ -427,8 +434,10 @@ def scan_skill_regret(root, progress=None):
                 b = agg.setdefault(sk, _skill_zero())
                 for k, v in a.items():
                     if k == "hist":
-                        for nm, c in v.items():
-                            b["hist"][nm] = b["hist"].get(nm, 0) + c
+                        for nm, hc in v.items():
+                            bh = b["hist"].setdefault(nm, {"calls": 0, "secs": 0.0})
+                            bh["calls"] += hc["calls"]
+                            bh["secs"] += hc["secs"]
                     else:
                         b[k] += v
         if progress:
@@ -438,15 +447,16 @@ def scan_skill_regret(root, progress=None):
 
 def _skill_zero():
     return {"fires": 0, "out": 0, "regret_out": 0, "regret_turns": 0,
-            "tools": 0, "asks": 0, "hist": {}, "inject_chars": 0, "injections": 0}
+            "tools": 0, "asks": 0, "secs": 0.0, "hist": {},
+            "inject_chars": 0, "injections": 0}
 
 
 def skill_regret(sessions):
     """Per-skill behavior profile. `fires` = turns the skill was attributed to.
 
     Keys: fires, out, regret_out, regret_turns, tools (total tool calls),
-    asks (AskUserQuestion calls = "asking the user for extra stuff"),
-    hist (tool-name -> count = what the skill actually triggers).
+    asks (AskUserQuestion calls), secs (total wall-clock of its turns),
+    hist (tool-name -> {calls, secs} = what it triggers and time spent there).
     Friction/regret is suspicion, not proof.
     """
     agg = {}
@@ -459,8 +469,11 @@ def skill_regret(sessions):
                 a["out"] += t.out
                 a["tools"] += len(t.tools)
                 a["asks"] += asks
+                a["secs"] += t.duration
                 for c in t.tools:
-                    a["hist"][c.name] = a["hist"].get(c.name, 0) + 1
+                    h = a["hist"].setdefault(c.name, {"calls": 0, "secs": 0.0})
+                    h["calls"] += 1
+                    h["secs"] += c.dur
                 if t.friction:
                     a["regret_out"] += t.out
                     a["regret_turns"] += 1

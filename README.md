@@ -120,19 +120,20 @@ walked itself back · **E**=2+ tool errors · **L**=retried the same command.
 
 ```
 ┌ turn 3 commands ────────────────────────────────────────────────────────────┐
-│ Turn 3 · gap 117s · dur 1217s · out 64.2k · ctx 384,334 · $9.96 · 53 tok/s    │
+│ Turn 3 · gap 117s · dur 1217s · in 1.9k / out 64.2k tok · ctx 384,334 · $9.96 │
 │ skills: claude-api                                                            │
 │ friction (suspicion, not proof): 2 tool-error(s), tool-loop                   │
+│ time = wall-clock to the next step (model think + tool exec + any wait)       │
 │                                                                               │
 │ prompt: current pricing per million tokens for Opus 4.x, Sonnet 4.x…          │
-├────┬───────────────────┬──────────────────────────────────────────────────────┤
-│  # │ tool              │ summary                                              │
-├────┼───────────────────┼──────────────────────────────────────────────────────┤
-│  1 │ Skill             │ claude-api                                           │
-│  2 │ Bash              │ jq -c 'select(.type==…) ' transcript.jsonl           │
-│  3 │ Bash ✗            │ python3 profile.py --selfcheck                       │
-│  4 │ Write             │ csa/pricing.py                              │
-└────┴───────────────────┴──────────────────────────────────────────────────────┘
+├────┬─────────────────┬───────┬───────────────────────────────────────────────┤
+│  # │ tool            │ time  │ summary                                       │
+├────┼─────────────────┼───────┼───────────────────────────────────────────────┤
+│  1 │ Skill           │   2s  │ claude-api                                    │
+│  2 │ Bash            │  40s  │ time python3 profile.py --top 15              │
+│  3 │ ToolSearch      │  29s  │ select:mcp__plugin_abe_abe__debate,…          │
+│  4 │ Write           │  25s  │ csa/pricing.py                                │
+└────┴─────────────────┴───────┴───────────────────────────────────────────────┘
 ```
 
 ### 4 · Skill regret — which skill is slowing you down (`s`)
@@ -165,20 +166,20 @@ each run) and the histogram of what it *actually* does in your traces.
 ```
 ┌ what this skill really does ────────────────────────────────────────────────┐
 │ claude-api                                                                   │
-│ ran in 1 turns · generated 64.2k output tok · triggered 44 tool calls        │
-│ (44.0/turn) · friction in 100% of its turns (suspicion)                      │
-│ context weight: loads ~509.2 KB (~130,354 tok, est) into context each time   │
-│ it runs · 1 load seen  (heavy!)                                              │
+│ ran in 1 turns · spent 20m (1217s/turn) · generated 64.2k output tok ·       │
+│ triggered 44 tool calls (44.0/turn) · friction in 100% of its turns          │
+│ context weight: loads ~509.2 KB (~130,354 tok, est) each run · 1 load (heavy!)│
 │                                                                              │
-│ What it actually triggers (observed in your traces):                         │
-├───────────────────┬─────────┬───────────────────────────────────────────────┤
-│ tool              │ calls   │ % of its tool use                             │
-├───────────────────┼─────────┼───────────────────────────────────────────────┤
-│ Bash              │   26    │ 59%                                           │
-│ Edit              │    9    │ 20%                                           │
-│ Write             │    5    │ 11%                                           │
-│ Read              │    4    │ 9%                                            │
-└───────────────────┴─────────┴───────────────────────────────────────────────┘
+│ What it actually triggers — calls + wall-time to next step                   │
+│ (AskUserQuestion time is mostly waiting on you):                             │
+├───────────────────┬─────────┬─────────┬─────────────────────────────────────┤
+│ tool              │ calls   │ time    │ % of its tool use                   │
+├───────────────────┼─────────┼─────────┼─────────────────────────────────────┤
+│ Bash              │   26    │   7m    │ 59%                                 │
+│ Edit              │    9    │   3m    │ 20%                                 │
+│ Write             │    5    │   2m    │ 11%                                 │
+│ Read              │    4    │   1m    │ 9%                                  │
+└───────────────────┴─────────┴─────────┴─────────────────────────────────────┘
 ```
 
 > This is the payoff: `claude-api` silently loads ~130k tokens of reference doc

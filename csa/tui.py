@@ -269,10 +269,12 @@ class TurnScreen(Screen):
         fr_line = ("[yellow]friction (suspicion, not proof): " + ", ".join(fr)
                    + "[/yellow]") if fr else "[green]no friction flags[/green]"
         prompt = (t.prompt or "").strip() or "(no text prompt)"
-        head = (f"[b]Turn {t.index}[/b] · gap {t.gap:.0f}s · dur {t.duration:.0f}s · "
-                f"out {human(t.out)} · ctx {t.ctx:,} · [b]${t.cost:,.2f}[/b] · "
-                f"{t.tok_per_s:.0f} tok/s\n"
-                f"skills: {', '.join(sorted(t.skills)) or '-'}\n{fr_line}\n\n"
+        head = (f"[b]Turn {t.index}[/b] · gap {t.gap:.0f}s · dur [b]{t.duration:.0f}s[/b] · "
+                f"in {human(t.fresh)} / out [b]{human(t.out)}[/b] tok · ctx {t.ctx:,} · "
+                f"[b]${t.cost:,.2f}[/b] · {t.tok_per_s:.0f} tok/s\n"
+                f"skills: {', '.join(sorted(t.skills)) or '-'}\n{fr_line}\n"
+                f"[dim]time = wall-clock to the next step (model think + tool exec + "
+                f"any wait for you)[/dim]\n\n"
                 f"[b]prompt[/b]: {prompt[:300]}")
         yield VerticalScroll(Static(head))
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
@@ -281,12 +283,12 @@ class TurnScreen(Screen):
 
     def on_mount(self):
         self.sub_title = f"turn {self.turn.index} commands"
-        self.table.add_columns("#", "tool", "summary")
+        self.table.add_columns("#", "tool", "time", "summary")
         for i, c in enumerate(self.turn.tools, 1):
             mark = " ✗" if c.is_error else ""
-            self.table.add_row(str(i), c.name + mark, c.summary or "")
+            self.table.add_row(str(i), c.name + mark, f"{c.dur:.0f}s", c.summary or "")
         if not self.turn.tools:
-            self.table.add_row("-", "(no tool calls)", "")
+            self.table.add_row("-", "(no tool calls)", "", "")
 
 
 # --------------------------------------------------------------------------- #
@@ -389,13 +391,16 @@ class SkillDetailScreen(Screen):
             inj_line = (f"\n[b]context weight[/b]: loads ~{avg / 1024:.1f} KB "
                         f"(~{avg / 4:,.0f} tok, est) into context each time it runs"
                         f" · {inj} load{'s' if inj != 1 else ''} seen{heavy}")
+        secs = a.get("secs", 0.0)
+        tstr = f"{secs / 60:.0f}m" if secs >= 120 else f"{secs:.0f}s"
         head = (f"[b]{self.skill}[/b]\n"
-                f"ran in [b]{a['fires']}[/b] turns · generated "
-                f"[b]{human(a['out'])}[/b] output tok · triggered "
-                f"[b]{a['tools']}[/b] tool calls ({per_turn:.1f}/turn) · friction in "
-                f"{pct:.0f}% of its turns [dim](suspicion)[/dim]"
-                f"{inj_line}{ask_note}\n\n"
-                f"[b]What it actually triggers[/b] (observed in your traces):")
+                f"ran in [b]{a['fires']}[/b] turns · spent [b]{tstr}[/b] "
+                f"({secs / fires:.0f}s/turn) · generated [b]{human(a['out'])}[/b] "
+                f"output tok · triggered [b]{a['tools']}[/b] tool calls "
+                f"({per_turn:.1f}/turn) · friction in {pct:.0f}% of its turns "
+                f"[dim](suspicion)[/dim]{inj_line}{ask_note}\n\n"
+                f"[b]What it actually triggers[/b] — calls + wall-time to next step "
+                f"[dim](AskUserQuestion time is mostly waiting on you)[/dim]:")
         yield Header()
         yield Static(head, id="head")
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
@@ -404,13 +409,15 @@ class SkillDetailScreen(Screen):
 
     def on_mount(self):
         self.sub_title = "what this skill really does"
-        self.table.add_columns("tool", "calls", "% of its tool use")
-        total = sum(self.data["hist"].values()) or 1
-        for name, c in sorted(self.data["hist"].items(), key=lambda kv: kv[1],
+        self.table.add_columns("tool", "calls", "time", "% of its tool use")
+        hist = self.data["hist"]
+        total = sum(h["calls"] for h in hist.values()) or 1
+        for name, h in sorted(hist.items(), key=lambda kv: kv[1]["calls"],
                               reverse=True):
-            self.table.add_row(name, str(c), f"{100 * c / total:.0f}%")
+            self.table.add_row(name, str(h["calls"]), f"{h['secs']:.0f}s",
+                               f"{100 * h['calls'] / total:.0f}%")
         if not self.data["hist"]:
-            self.table.add_row("(no tool calls)", "0", "-")
+            self.table.add_row("(no tool calls)", "0", "0s", "-")
 
 
 # --------------------------------------------------------------------------- #

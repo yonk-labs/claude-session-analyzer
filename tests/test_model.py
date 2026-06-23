@@ -185,6 +185,37 @@ def test_corpus_tool_hist():
     shutil.rmtree(d, ignore_errors=True)
 
 
+def test_tool_timing():
+    import os
+    rows = [
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
+                    "message": {"role": "user", "content": "go"}}),
+        json.dumps({"type": "assistant", "requestId": "r1",
+                    "timestamp": "2026-06-22T10:00:01.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "tool_use", "name": "Bash",
+                                             "input": {"command": "ls"}}],
+                                "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+        json.dumps({"type": "assistant", "requestId": "r2",
+                    "timestamp": "2026-06-22T10:00:05.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "tool_use", "name": "Bash",
+                                             "input": {"command": "make"}}],
+                                "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+    ]
+    f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+    f.write("\n".join(rows))
+    f.close()
+    s = model.load_session(f.name)
+    t = s.turns[0]
+    assert t.tools[0].dur == 4.0          # ls -> make is 4s
+    assert t.tools[1].dur == 0.0          # last call, ends at turn end
+    a = model.skill_regret([s])["(none)"]
+    assert a["secs"] == t.duration
+    assert a["hist"]["Bash"] == {"calls": 2, "secs": 4.0}
+    os.unlink(f.name)
+
+
 def _run():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

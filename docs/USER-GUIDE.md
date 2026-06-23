@@ -184,8 +184,9 @@ show all turns (clear filter) · `Esc` back · `q` quit.
 
 Opened by selecting a turn. The deepest level: what actually happened.
 
-**Header** shows the turn's stats, the skills that ran, a friction line (named
-flags, labeled "suspicion, not proof"), and the **prompt** text that started it.
+**Header** shows the turn's stats — including **in / out tokens** and total
+**duration** — the skills that ran, a friction line (named flags, labeled
+"suspicion, not proof"), and the **prompt** text that started it.
 
 **Commands table** — every tool call in the turn, in order:
 
@@ -193,9 +194,11 @@ flags, labeled "suspicion, not proof"), and the **prompt** text that started it.
 |---|---|
 | `#` | Order within the turn. |
 | `tool` | Tool name. A `✗` marks a tool result that errored. |
+| `time` | Wall-clock seconds to the next step — **includes** model thinking, tool execution, and any wait for your input. Not pure tool-execution time. |
 | `summary` | One-line summary of the call (the command, file path, query, or skill name). |
 
-This is where you see, concretely, what a turn spent its time and tokens on.
+This is where you see, concretely, what a turn spent its time and tokens on — and
+which single command ate the clock.
 
 ---
 
@@ -233,8 +236,8 @@ and what does it actually do?**
 
 **Header** shows:
 
-- how many turns it ran, output generated, tool calls (and per-turn rate),
-  friction %.
+- how many turns it ran, **total wall-time spent** (and per-turn average), output
+  tokens generated, tool calls (and per-turn rate), friction %.
 - **context weight** — `loads ~X KB (~Y tok, est) into context each time it runs`,
   with the number of loads observed. A `(heavy!)` tag appears over ~30k tokens.
   This is the SKILL.md text the skill injects on every invocation — the silent
@@ -248,6 +251,7 @@ and what does it actually do?**
 |---|---|
 | `tool` | Tool name. |
 | `calls` | How many times this skill triggered it. |
+| `time` | Total wall-clock seconds spent in that tool across the skill's turns. Same caveat as the turn screen — includes think/wait time, so `AskUserQuestion` time is mostly *you* deciding, not the tool. |
 | `% of its tool use` | Share of the skill's total tool calls. |
 
 A skill's advertised behavior and its real behavior can differ. This table is the
