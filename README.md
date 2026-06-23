@@ -229,8 +229,8 @@ Corpus-wide from the browser, or for one session from inside it.
 └───────────────────┴─────────┴───────────────────────────────────────────────┘
 ```
 
-**Keys:** `Enter` drill in · `Esc` back · click a header to sort · `s` skills ·
-`t` tools · `a` all-turns · `q` quit.
+**Keys:** `Enter` drill in · `Esc` back · **`1`–`9`** (or click a header) sort ·
+`s` skills · `t` tools · `a` all (sessions / turns) · `q` quit.
 
 ➡ Full per-screen reference: **[docs/USER-GUIDE.md](docs/USER-GUIDE.md)**
 

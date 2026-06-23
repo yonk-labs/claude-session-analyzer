@@ -89,10 +89,12 @@ opening the TUI. `python3 profile.py …` is a kept alias for the same entry poi
 ## The TUI: navigation
 
 - **Enter** drills down (open a session, a turn, a skill).
-- **Esc** goes back one screen.
-- **Click a column header** to sort by it; click again to reverse.
+- **Esc** goes back one screen (quits from the landing screen).
+- **Sort:** press **`1`–`9`** to sort by that column (press the same number again
+  to reverse), **or** click a column header with the mouse. The number is the
+  column's position, left to right.
 - **Mouse or arrow keys** move the row cursor; **Enter** selects.
-- Global keys: **`q`** quit. Per-screen keys are shown in the footer.
+- Global keys: **`q`** quit. Per-screen keys are shown in the footer and status line.
 
 Loading is asynchronous — the corpus scan (~6s for ~1,700 sessions) and the
 skill-regret scan (~8s) run in a background thread with a status line, so the UI

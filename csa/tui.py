@@ -43,8 +43,28 @@ def _bar(val, maxv, width=10):
     return "█" * n + " " * (width - n)
 
 
+class Sortable:
+    """Keyboard sort for table screens: press 1-9 to sort by that column (press
+    the same number again to reverse). Mouse: click the header. Screens expose
+    COLS, sort_i, sort_rev and a _resort() that re-renders the table."""
+
+    def on_key(self, event):
+        key = event.key
+        if key in "123456789" and getattr(self, "COLS", None):
+            i = int(key) - 1
+            if 0 <= i < len(self.COLS):
+                self.sort_rev = (self.COLS[i][2] if i != self.sort_i
+                                 else not self.sort_rev)
+                self.sort_i = i
+                self._resort()
+                event.stop()
+
+    def _resort(self):
+        self._fill()
+
+
 # --------------------------------------------------------------------------- #
-class ProjectsScreen(Screen):
+class ProjectsScreen(Sortable, Screen):
     """Landing screen: sessions rolled up per project. Enter a project to see its
     sessions, or 'a' for every session across all projects."""
     BINDINGS = [("q", "app.quit", "Quit"), ("a", "all_sessions", "All sessions"),
@@ -89,8 +109,8 @@ class ProjectsScreen(Screen):
         total = sum(s.cost for s in summaries)
         self.status.update(
             f"[b]{len(self.rows)}[/b] projects · [b]{len(summaries)}[/b] sessions · "
-            f"~[b]${total:,.0f}[/b] · Enter a project · [b]a[/b]=all sessions · "
-            f"[b]s[/b]=skills · [b]t[/b]=tools")
+            f"~[b]${total:,.0f}[/b] · Enter a project · [b]a[/b]=all · "
+            f"[b]s[/b]=skills [b]t[/b]=tools · [b]1-9[/b]/click header=sort")
         self._fill()
 
     def _fill(self):
@@ -130,7 +150,7 @@ class ProjectsScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-class BrowserScreen(Screen):
+class BrowserScreen(Sortable, Screen):
     """A list of sessions — either a pre-scanned subset (one project / all), or
     scanned from `root` (used by --local). is_root=True means Esc quits."""
     BINDINGS = [("escape", "back", "Back"), ("q", "app.quit", "Quit"),
@@ -194,8 +214,8 @@ class BrowserScreen(Screen):
                                          for s in self.summaries) else "")
             self.status.update(
                 f"[b]{len(self.summaries)}[/b] sessions · ~[b]${total:,.0f}[/b] "
-                f"token-value{est} · click header to sort · Enter opens · "
-                f"[b]s[/b]=skills · [b]t[/b]=tools")
+                f"token-value{est} · Enter opens · [b]s[/b]=skills [b]t[/b]=tools · "
+                f"[b]1-9[/b]/click header=sort")
         else:
             self.status.update(
                 "[yellow]No sessions here.[/yellow] For --local, run csa from a "
@@ -237,7 +257,7 @@ class BrowserScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-class SessionScreen(Screen):
+class SessionScreen(Sortable, Screen):
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit"),
                 ("a", "all_turns", "All turns"), ("t", "tools", "Tools")]
     COLS = [
@@ -310,6 +330,9 @@ class SessionScreen(Screen):
                 f"{_bar(x['cost'], mc)} ${x['cost']:.2f}",
                 f"{_bar(x['turns'], mn)} {x['turns']}",
                 key=str(i))
+
+    def _resort(self):
+        self._fill_turns()
 
     def _fill_turns(self):
         self.view.sort(key=self.COLS[self.sort_i][1], reverse=self.sort_rev)
@@ -403,7 +426,7 @@ class TurnScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-class SkillScreen(Screen):
+class SkillScreen(Sortable, Screen):
     """Corpus-wide per-skill regret leaderboard. Suspicion, not proof."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
     COLS = [
@@ -536,7 +559,7 @@ class SkillDetailScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-class ToolsScreen(Screen):
+class ToolsScreen(Sortable, Screen):
     """Which tools were called and how often — for a session or a group."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
     COLS = [("tool", lambda r: r[0], False),
