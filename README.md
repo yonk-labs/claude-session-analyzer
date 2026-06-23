@@ -36,10 +36,14 @@ The text CLI is stdlib-only. The TUI's one dependency is
 
 ```
 csa                  # one-shot text report over every session
-csa --tui            # interactive: browse → drill down → analyze
+csa --tui            # interactive: projects → sessions → drill down
+csa --local          # only the current directory's sessions (the cwd's project)
 csa --session FILE   # per-turn breakdown of one transcript
 csa /other/projects  # point at a different root
 ```
+
+`--local` works for both the text report and `--tui` — it maps the current
+directory to its Claude Code project and scopes everything to it.
 
 ### The CLI report
 
@@ -69,10 +73,27 @@ per token (cache-read is ~10% price) but it's a huge, constant footprint.
 
 ## The TUI
 
-Six screens, each an aggregation of the same parsed transcript. Sample data below
-is illustrative.
+It opens on a **Projects** overview — sessions rolled up per project. Drill into
+one project to see its sessions, or press `a` for every session across all
+projects. (`csa --tui --local` skips straight to the current directory's
+sessions.) Sample data below is illustrative.
 
-### 1 · Browser — every session, sortable
+### 1 · Projects — sessions rolled up per project (landing screen)
+
+```
+┌ csa · projects ─────────────────────────────────────────────────────────────┐
+│ 52 projects · 1,240 sessions · ~$8,432 · Enter a project · a=all sessions      │
+├──────────────────────────┬──────────┬──────────┬───────┬──────────┬───────────┤
+│ project                  │ sessions │       $ ▼│  out  │ in+cache │ last used │
+├──────────────────────────┼──────────┼──────────┼───────┼──────────┼───────────┤
+│ ~/acme-api               │    41    │ $2,788   │ 9.2M  │   3.1B   │ 2026-06-21│
+│ ~/web-app                │    33    │ $1,799   │ 6.1M  │   2.0B   │ 2026-06-20│
+│ ~/data-pipeline          │    10    │ $1,386   │ 2.4M  │   1.0B   │ 2026-06-18│
+└──────────────────────────┴──────────┴──────────┴───────┴──────────┴───────────┘
+  Enter open project · a all sessions · s skills · t tools · q quit
+```
+
+### 2 · Browser — sessions in a project (or all), sortable
 
 ```
 ┌ csa ───────────────────────────────────────────────────────────────┐
@@ -88,7 +109,7 @@ is illustrative.
   Enter open · s skills · t tools · q quit
 ```
 
-### 2 · Session — bucketed bars + sortable turns
+### 3 · Session — bucketed bars + sortable turns
 
 The bar table is your spike-finder. **Click a bucket to filter the turns below to
 that time window** (`a` clears).
@@ -116,7 +137,7 @@ that time window** (`a` clears).
 `fric` flags (suspicion, not proof): **C**=you corrected it next · **S**=it
 walked itself back · **E**=2+ tool errors · **L**=retried the same command.
 
-### 3 · Turn detail — the commands
+### 4 · Turn detail — the commands
 
 ```
 ┌ turn 3 commands ────────────────────────────────────────────────────────────┐
@@ -140,7 +161,7 @@ then *thought* 32s before its next move. Instant tools (Write, ToolSearch) with 
 big Δ are pure think time you'd never have seen.
 ```
 
-### 4 · Skill regret — which skill is slowing you down (`s`)
+### 5 · Skill regret — which skill is slowing you down (`s`)
 
 `asks` = how often a skill interrupts **you** for input. `regret%` = share of its
 turns with friction (correlation, not proof — `out`/`asks`/`tools` are the
@@ -162,7 +183,7 @@ trustworthy columns).
   Enter a skill for its profile · Esc back
 ```
 
-### 5 · Skill detail — what it loads + what it triggers
+### 6 · Skill detail — what it loads + what it triggers
 
 Open a skill to see its **context weight** (how many tokens its SKILL.md injects
 each run) and the histogram of what it *actually* does in your traces.
@@ -190,7 +211,7 @@ each run) and the histogram of what it *actually* does in your traces.
 > every time it fires. `brainstorming` is lighter (~2.5k) but asks you 2+
 > questions per turn. Different costs, both invisible until now.
 
-### 6 · Tools — what got called, how often (`t`)
+### 7 · Tools — what got called, how often (`t`)
 
 Corpus-wide from the browser, or for one session from inside it.
 

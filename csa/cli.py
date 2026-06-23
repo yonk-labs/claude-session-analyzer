@@ -75,13 +75,22 @@ def main(argv=None):
     ap.add_argument("root", nargs="?", default=str(DEFAULT_ROOT))
     ap.add_argument("--session", help="per-turn detail for one transcript file")
     ap.add_argument("--tui", action="store_true", help="launch interactive browser")
+    ap.add_argument("--local", action="store_true",
+                    help="only this directory's sessions (the project for the cwd)")
     ap.add_argument("--top", type=int, default=15)
     a = ap.parse_args(argv)
+
+    local_root = None
+    if a.local:
+        local_root = Path(a.root) / model.slugify_path(Path.cwd())
+
     if a.tui:
         from .tui import run
-        run(a.root)
+        run(a.root, local_root=local_root)
     elif a.session:
         session(a.session)
+    elif local_root is not None:
+        profile(local_root, a.top)
     else:
         profile(a.root, a.top)
 

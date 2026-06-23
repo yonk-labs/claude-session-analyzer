@@ -13,12 +13,28 @@ Honest-labeling notes (abe multi-model review):
     infer per-skill "passive" context cost from it.
 """
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import pricing
+
+# Claude Code names each project dir by slugging the absolute cwd: every run of
+# non-alphanumerics becomes a single "-". e.g. /home/u/my_app -> -home-u-my-app.
+_HOME_SLUG = re.sub(r"[^A-Za-z0-9]+", "-", str(Path.home()))
+
+
+def slugify_path(path):
+    """The project-dir slug Claude Code would use for a directory."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", os.path.abspath(path))
+
+
+def pretty_project(project, width=40):
+    """Readable project name: collapse the home-dir slug prefix to ~/."""
+    p = project.replace(_HOME_SLUG + "-", "~/")
+    return p[:width]
 
 # --- friction heuristics (regex over text); cheap, suspicion-only -----------
 # Tightened to reduce false positives (abe panel: "correction is overdefined").
@@ -361,6 +377,31 @@ class SessionSummary:
         return self.out / self.wall if self.wall > 0 else 0.0
 
 
+def _main_transcript(any_path, proj, sid):
+    """The main <id>.jsonl path for a session, from any of its files."""
+    parts = Path(any_path).parts
+    try:
+        i = parts.index("projects")
+        return Path(*parts[:i + 1]) / proj / f"{sid}.jsonl"
+    except ValueError:
+        return Path(any_path)
+
+
+def project_totals(summaries):
+    """Roll session summaries up per project. Returns list of dicts sorted by cost."""
+    by = {}
+    for s in summaries:
+        p = by.setdefault(s.project, {"project": s.project, "sessions": 0,
+                                      "cost": 0.0, "out": 0, "ctx_in": 0, "tmax": None})
+        p["sessions"] += 1
+        p["cost"] += s.cost
+        p["out"] += s.out
+        p["ctx_in"] += s.ctx_in
+        if s.tmax and (p["tmax"] is None or s.tmax > p["tmax"]):
+            p["tmax"] = s.tmax
+    return sorted(by.values(), key=lambda d: d["cost"], reverse=True)
+
+
 def scan_corpus(root):
     """Stream every transcript under root into per-session summaries.
 
@@ -374,7 +415,7 @@ def scan_corpus(root):
         s = sessions.get((proj, sid))
         if s is None:
             s = SessionSummary(project=proj, session_id=sid,
-                               path=root / proj / f"{sid}.jsonl")
+                               path=_main_transcript(path, proj, sid))
             sessions[(proj, sid)] = s
         s.files += 1
         is_main = path.name == f"{sid}.jsonl"
@@ -427,15 +468,17 @@ def scan_corpus(root):
     return list(sessions.values())
 
 
-def scan_skill_regret(root, progress=None):
-    """Corpus-wide per-skill regret by loading each main transcript.
+def scan_skill_regret(root=None, progress=None, paths=None):
+    """Per-skill regret by loading transcripts. Scope with `root` (all projects
+    under it) or an explicit `paths` list (e.g. one project's sessions).
 
-    Heavier than scan_corpus (builds turns) but only reads main transcripts, not
-    subagents — ~8s over ~1700 sessions. `progress(done, total)` is called per file.
-    Returns the same dict shape as skill_regret().
+    Heavier than scan_corpus (builds turns) but only reads main transcripts.
+    `progress(done, total)` is called per file. Returns skill_regret()'s shape.
     """
-    root = Path(root)
-    mains = list(root.glob("*/*.jsonl"))
+    if paths is not None:
+        mains = [Path(p) for p in paths]
+    else:
+        mains = list(Path(root).glob("*/*.jsonl"))
     agg = {}
     for n, p in enumerate(mains, 1):
         try:

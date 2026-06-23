@@ -69,14 +69,15 @@ writes to `~/.claude/projects/<project>/<session-id>.jsonl` (and that session's
 ## The text CLI
 
 ```
-csa [ROOT] [--session FILE] [--tui] [--top N]
+csa [ROOT] [--session FILE] [--tui] [--local] [--top N]
 ```
 
 | Invocation | What it does |
 |---|---|
 | `csa` | Corpus profile over `ROOT` (default `~/.claude/projects`): global token totals, bloat ratio, estimated spend, and the top-N sessions by spend. |
 | `csa --session FILE` | Per-turn table for one transcript: gap, duration, out, ctx, $, tok/s, tool count, friction flags, skills. |
-| `csa --tui` | Launch the interactive browser. |
+| `csa --tui` | Launch the interactive TUI (opens on the Projects screen). |
+| `csa --local` | Scope to **just the current directory's project** — maps the cwd to its Claude Code project slug. Works for the text report and (with `--tui`) lands straight on that project's sessions. |
 | `csa /path` | Use a different transcripts root. |
 | `--top N` | How many sessions to list in the profile (default 15). |
 
@@ -99,9 +100,24 @@ stays responsive.
 
 ---
 
+## Screen — Projects
+
+The **landing screen**. Sessions rolled up per project, one row each.
+
+**Columns** (sortable): `project` · `sessions` (count) · `$` (total spend) ·
+`out` · `in+cache` · `last used`. Default sort: `$` descending.
+
+**Keys:** `Enter` open that project's sessions · **`a`** all sessions across every
+project · **`s`** skill regret (all projects) · **`t`** tools (all projects) · `q`
+quit. (`csa --tui --local` skips this screen and lands on the Browser for the
+current directory's project.)
+
+---
+
 ## Screen — Browser
 
-The landing screen: one row per session under the root.
+Sessions list — reached by opening a project on the Projects screen, by pressing
+**`a`** there for every session, or directly via `--local`. One row per session.
 
 **Status line** shows total session count and approximate token-value spend.
 
@@ -121,8 +137,8 @@ The landing screen: one row per session under the root.
 
 **Default sort:** `$` descending — your most expensive sessions first.
 
-**Keys:** `Enter` open session · **`s`** skill-regret leaderboard · **`t`**
-corpus tools view · `r` rescan · `q` quit.
+**Keys:** `Enter` open session · **`s`** skill regret (scoped to this list) · **`t`**
+tools (scoped to this list) · `Esc` back to Projects · `q` quit.
 
 ---
 

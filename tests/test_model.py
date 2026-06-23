@@ -224,6 +224,33 @@ def test_tool_timing():
     os.unlink(f.name)
 
 
+def test_project_helpers():
+    import os
+    assert model.slugify_path("/home/u/my_app") == "-home-u-my-app"
+    home = os.path.abspath(os.path.expanduser("~"))
+    assert model.pretty_project(model.slugify_path(home + "/proj")).startswith("~/")
+    s1 = model.SessionSummary(project="p", session_id="a", path=None, cost=1.0, out=10)
+    s2 = model.SessionSummary(project="p", session_id="b", path=None, cost=2.0, out=20)
+    s3 = model.SessionSummary(project="q", session_id="c", path=None, cost=5.0, out=5)
+    pt = model.project_totals([s1, s2, s3])
+    assert pt[0]["project"] == "q"               # sorted by cost desc
+    by = {d["project"]: d for d in pt}
+    assert by["p"]["sessions"] == 2 and by["p"]["cost"] == 3.0 and by["p"]["out"] == 30
+
+
+def test_scan_skill_regret_paths():
+    import os
+    import shutil
+    d = tempfile.mkdtemp()
+    proj = os.path.join(d, "projects", "-p")
+    os.makedirs(proj)
+    p = os.path.join(proj, "s.jsonl")
+    shutil.copy(_fixture(), p)
+    agg = model.scan_skill_regret(paths=[p])           # explicit paths, no root
+    assert "superpowers:brainstorming" in agg
+    shutil.rmtree(d, ignore_errors=True)
+
+
 def _run():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

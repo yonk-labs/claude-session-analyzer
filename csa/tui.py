@@ -35,7 +35,7 @@ def when(dt):
 
 
 def short_proj(p, w=30):
-    return p.replace("-home-yonk-", "~/")[:w]
+    return model.pretty_project(p, w)
 
 
 def _bar(val, maxv, width=10):
@@ -44,8 +44,96 @@ def _bar(val, maxv, width=10):
 
 
 # --------------------------------------------------------------------------- #
+class ProjectsScreen(Screen):
+    """Landing screen: sessions rolled up per project. Enter a project to see its
+    sessions, or 'a' for every session across all projects."""
+    BINDINGS = [("q", "app.quit", "Quit"), ("a", "all_sessions", "All sessions"),
+                ("s", "skills", "Skill regret"), ("t", "tools", "Tools")]
+    COLS = [
+        ("project", lambda d: d["project"], False),
+        ("sessions", lambda d: d["sessions"], True),
+        ("$", lambda d: d["cost"], True),
+        ("out", lambda d: d["out"], True),
+        ("in+cache", lambda d: d["ctx_in"], True),
+        ("last used", lambda d: d["tmax"] or datetime.min, True),
+    ]
+
+    def __init__(self, root):
+        super().__init__()
+        self.root = root
+        self.summaries = []
+        self.rows = []
+        self.sort_i, self.sort_rev = 2, True   # $ desc
+
+    def compose(self):
+        yield Header()
+        self.status = Static("Scanning transcripts…", id="status")
+        yield self.status
+        self.table = DataTable(cursor_type="row", zebra_stripes=True)
+        yield self.table
+        yield Footer()
+
+    def on_mount(self):
+        self.sub_title = "projects"
+        self.table.add_columns(*[c[0] for c in self.COLS])
+        self.load()
+
+    @work(thread=True, exclusive=True)
+    def load(self):
+        rows = model.scan_corpus(self.root)
+        self.app.call_from_thread(self._populate, rows)
+
+    def _populate(self, summaries):
+        self.summaries = summaries
+        self.rows = model.project_totals(summaries)
+        total = sum(s.cost for s in summaries)
+        self.status.update(
+            f"[b]{len(self.rows)}[/b] projects · [b]{len(summaries)}[/b] sessions · "
+            f"~[b]${total:,.0f}[/b] · Enter a project · [b]a[/b]=all sessions · "
+            f"[b]s[/b]=skills · [b]t[/b]=tools")
+        self._fill()
+
+    def _fill(self):
+        self.rows.sort(key=self.COLS[self.sort_i][1], reverse=self.sort_rev)
+        self.table.clear()
+        for i, d in enumerate(self.rows):
+            self.table.add_row(
+                short_proj(d["project"], 46), str(d["sessions"]),
+                f"${d['cost']:,.2f}", human(d["out"]), human(d["ctx_in"]),
+                when(d["tmax"]), key=str(i))
+
+    def on_data_table_header_selected(self, e):
+        i = e.column_index
+        self.sort_rev = self.COLS[i][2] if i != self.sort_i else not self.sort_rev
+        self.sort_i = i
+        self._fill()
+
+    def on_data_table_row_selected(self, e):
+        proj = self.rows[int(e.row_key.value)]["project"]
+        subset = [s for s in self.summaries if s.project == proj]
+        self.app.push_screen(BrowserScreen(short_proj(proj, 46), summaries=subset))
+
+    def action_all_sessions(self):
+        if self.summaries:
+            self.app.push_screen(BrowserScreen(
+                f"all {len(self.summaries)} sessions", summaries=list(self.summaries)))
+
+    def action_skills(self):
+        self.app.push_screen(SkillScreen(root=self.root, scope="all projects"))
+
+    def action_tools(self):
+        merged = {}
+        for s in self.summaries:
+            for nm, c in s.hist.items():
+                merged[nm] = merged.get(nm, 0) + c
+        self.app.push_screen(ToolsScreen("all projects", merged))
+
+
+# --------------------------------------------------------------------------- #
 class BrowserScreen(Screen):
-    BINDINGS = [("q", "app.quit", "Quit"), ("r", "reload", "Reload"),
+    """A list of sessions — either a pre-scanned subset (one project / all), or
+    scanned from `root` (used by --local). is_root=True means Esc quits."""
+    BINDINGS = [("escape", "back", "Back"), ("q", "app.quit", "Quit"),
                 ("s", "skills", "Skill regret"), ("t", "tools", "Tools")]
     COLS = [
         ("$", lambda s: s.cost, True),
@@ -59,52 +147,59 @@ class BrowserScreen(Screen):
         ("when", lambda s: s.tmax or datetime.min, True),
     ]
 
-    def __init__(self, root):
+    def __init__(self, title, summaries=None, root=None, is_root=False):
         super().__init__()
-        self.root = root
-        self.summaries = []
+        self.title_ = title
+        self.summaries = summaries or []
+        self.scan_root = root          # if set, scan it on mount
+        self.is_root = is_root
         self.sort_i, self.sort_rev = 0, True
 
     def compose(self):
         yield Header()
-        self.status = Static("Scanning transcripts…", id="status")
+        self.status = Static("…", id="status")
         yield self.status
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
         yield self.table
         yield Footer()
 
     def on_mount(self):
+        self.sub_title = self.title_
         self.table.add_columns(*[c[0] for c in self.COLS])
-        self.load_data()
+        if self.scan_root is not None:
+            self.status.update("Scanning transcripts…")
+            self.load_data()
+        else:
+            self._ready()
 
-    def action_reload(self):
-        self.status.update("Rescanning…")
-        self.load_data()
-
-    def action_skills(self):
-        self.app.push_screen(SkillScreen(self.root))
-
-    def action_tools(self):
-        if not self.summaries:
-            return
-        merged = {}
-        for s in self.summaries:
-            for nm, c in s.hist.items():
-                merged[nm] = merged.get(nm, 0) + c
-        self.app.push_screen(ToolsScreen(f"{len(self.summaries)} sessions", merged))
+    def action_back(self):
+        if self.is_root:
+            self.app.exit()
+        else:
+            self.app.pop_screen()
 
     @work(thread=True, exclusive=True)
     def load_data(self):
-        rows = model.scan_corpus(self.root)
-        self.app.call_from_thread(self._populate, rows)
+        rows = model.scan_corpus(self.scan_root)
+        self.app.call_from_thread(self._set_rows, rows)
 
-    def _populate(self, rows):
+    def _set_rows(self, rows):
         self.summaries = rows
-        total = sum(s.cost for s in rows)
-        est = " (some est.)" if any(pricing.is_estimate(s.model) for s in rows) else ""
-        self.status.update(
-            f"[b]{len(rows)}[/b] sessions · ~[b]${total:,.0f}[/b] token-value{est} · "
-            f"click header to sort · Enter opens · [b]s[/b]=skill regret")
+        self._ready()
+
+    def _ready(self):
+        if self.summaries:
+            total = sum(s.cost for s in self.summaries)
+            est = (" (some est.)" if any(pricing.is_estimate(s.model)
+                                         for s in self.summaries) else "")
+            self.status.update(
+                f"[b]{len(self.summaries)}[/b] sessions · ~[b]${total:,.0f}[/b] "
+                f"token-value{est} · click header to sort · Enter opens · "
+                f"[b]s[/b]=skills · [b]t[/b]=tools")
+        else:
+            self.status.update(
+                "[yellow]No sessions here.[/yellow] For --local, run csa from a "
+                "directory you've used with Claude Code.")
         self._fill()
 
     def _fill(self):
@@ -125,6 +220,20 @@ class BrowserScreen(Screen):
 
     def on_data_table_row_selected(self, e):
         self.app.push_screen(SessionScreen(self.summaries[int(e.row_key.value)]))
+
+    def action_skills(self):
+        if self.summaries:
+            self.app.push_screen(SkillScreen(
+                paths=[str(s.path) for s in self.summaries], scope=self.title_))
+
+    def action_tools(self):
+        if not self.summaries:
+            return
+        merged = {}
+        for s in self.summaries:
+            for nm, c in s.hist.items():
+                merged[nm] = merged.get(nm, 0) + c
+        self.app.push_screen(ToolsScreen(self.title_, merged))
 
 
 # --------------------------------------------------------------------------- #
@@ -306,9 +415,11 @@ class SkillScreen(Screen):
         ("regret%", lambda r: (r[1]["regret_turns"] / r[1]["fires"] if r[1]["fires"] else 0), True),
     ]
 
-    def __init__(self, root):
+    def __init__(self, root=None, paths=None, scope=""):
         super().__init__()
         self.root = root
+        self.paths = paths
+        self.scope = scope
         self.rows = []
         self.sort_i, self.sort_rev = 2, True  # default: out desc
 
@@ -321,7 +432,7 @@ class SkillScreen(Screen):
         yield Footer()
 
     def on_mount(self):
-        self.sub_title = "skill regret — suspicion, not proof"
+        self.sub_title = f"skill regret · {self.scope}" if self.scope else "skill regret"
         self.table.add_columns(*[c[0] for c in self.COLS])
         self.load()
 
@@ -331,7 +442,7 @@ class SkillScreen(Screen):
             if n % 150 == 0 or n == total:
                 self.app.call_from_thread(self.status.update,
                                           f"Analyzing… {n}/{total} sessions")
-        agg = model.scan_skill_regret(self.root, progress=prog)
+        agg = model.scan_skill_regret(root=self.root, paths=self.paths, progress=prog)
         self.app.call_from_thread(self._populate, agg)
 
     def _populate(self, agg):
@@ -478,13 +589,19 @@ class ClaudeTraceApp(App):
     """
     TITLE = "csa"
 
-    def __init__(self, root):
+    def __init__(self, root, local_root=None):
         super().__init__()
         self.root = root
+        self.local_root = local_root
 
     def on_mount(self):
-        self.push_screen(BrowserScreen(self.root))
+        if self.local_root is not None:
+            # --local: skip the projects list, land on this directory's sessions
+            self.push_screen(BrowserScreen("this directory",
+                                           root=self.local_root, is_root=True))
+        else:
+            self.push_screen(ProjectsScreen(self.root))
 
 
-def run(root):
-    ClaudeTraceApp(root).run()
+def run(root, local_root=None):
+    ClaudeTraceApp(root, local_root).run()
