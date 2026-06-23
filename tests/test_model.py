@@ -412,6 +412,64 @@ def test_skill_regret_breakdown_keys():
     assert a["corrections"] == 1     # turn-1 was corrected by turn-2
 
 
+def test_load_subagents():
+    """A spawned subagent is parsed from <sid>/subagents/agent-<id>.jsonl, linked
+    to its parent Task call via toolUseResult.agentId, and fully costed."""
+    import os
+    import shutil
+    d = tempfile.mkdtemp()
+    sid, aid = "sess1", "a0deadbeef"
+    main = os.path.join(d, f"{sid}.jsonl")
+    main_rows = [
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
+                    "message": {"role": "user", "content": "go"}}),
+        json.dumps({"type": "assistant", "requestId": "r1",
+                    "timestamp": "2026-06-22T10:00:01.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "tool_use", "id": "u_task",
+                                             "name": "Task",
+                                             "input": {"description": "Trace the bug",
+                                                       "prompt": "find it"}}],
+                                "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+        # the Task tool_result carries toolUseResult.agentId -> links to the subagent
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:09.000Z",
+                    "toolUseResult": {"agentId": aid},
+                    "message": {"role": "user",
+                                "content": [{"type": "tool_result",
+                                             "tool_use_id": "u_task", "content": "done"}]}}),
+    ]
+    with open(main, "w") as fh:
+        fh.write("\n".join(main_rows))
+    subdir = os.path.join(d, sid, "subagents")
+    os.makedirs(subdir)
+    sub_rows = [
+        json.dumps({"type": "user", "isSidechain": True, "agentId": aid,
+                    "timestamp": "2026-06-22T10:00:02.000Z",
+                    "message": {"role": "user", "content": "find it"}}),
+        json.dumps({"type": "assistant", "requestId": "s1",
+                    "timestamp": "2026-06-22T10:00:03.000Z",
+                    "message": {"role": "assistant", "model": "claude-haiku-4-5-20251001",
+                                "content": [{"type": "tool_use", "id": "su1",
+                                             "name": "Grep", "input": {"pattern": "x"}}],
+                                "usage": {"output_tokens": 40, "input_tokens": 10}}}),
+    ]
+    with open(os.path.join(subdir, f"agent-{aid}.jsonl"), "w") as fh:
+        fh.write("\n".join(sub_rows))
+
+    subs = model.load_subagents(main)
+    assert len(subs) == 1
+    s = subs[0]
+    assert s.agent_id == aid
+    assert s.task_uid == "u_task"
+    assert s.task_desc == "Trace the bug"        # linked from the parent Task call
+    assert s.model == "claude-haiku-4-5-20251001"
+    assert s.turn and len(s.turn.tools) == 1 and s.turn.tools[0].name == "Grep"
+    assert s.out == 40 and s.cost > 0
+    # a session with no subagents dir -> empty, no crash
+    assert model.load_subagents(os.path.join(d, "none.jsonl")) == []
+    shutil.rmtree(d, ignore_errors=True)
+
+
 def _run():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

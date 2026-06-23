@@ -5,6 +5,9 @@ Drill-down screens, each an aggregation of the same parsed model:
   Session  -> bucketed bar table (tokens/spend/turns) + sortable turns;
               click a bucket to filter turns to that time window
   Turn     -> the commands/tool-calls in one turn, with friction flags
+              (a Task/Agent row drills into the subagent it spawned)
+  Subagents-> the subagents a session spawned (press 'b' in a session), each a
+              mini-transcript reusing the Turn/Step screens
   Skills   -> corpus-wide per-skill regret leaderboard (press 's' in browser)
 
 Honest labels (abe review): tok/s is END-TO-END throughput, not decode speed;
@@ -15,6 +18,7 @@ from datetime import datetime
 
 from textual import work
 from textual.app import App
+from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Static
@@ -289,7 +293,7 @@ class SessionScreen(Sortable, Screen):
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit"),
                 ("g", "graphs", "Stats ⇄ graphs"),
                 ("a", "all_turns", "All turns"), ("t", "tools", "Tools"),
-                ("m", "mcp", "MCP")]
+                ("m", "mcp", "MCP"), ("b", "subagents", "Subagents")]
     COLS = [
         ("#", lambda t: t.index, False),
         ("gap", lambda t: t.gap, True),
@@ -308,6 +312,8 @@ class SessionScreen(Sortable, Screen):
         super().__init__()
         self.summary = summary
         self.session = None
+        self.subs = []                # list[model.Subagent]
+        self.subs_by_uid = {}         # Task tool_use id -> Subagent (for nested drill)
         self.all_turns, self.view = [], []
         self.bkts = []
         self.sort_i, self.sort_rev = 0, False
@@ -336,10 +342,13 @@ class SessionScreen(Sortable, Screen):
     @work(thread=True, exclusive=True)
     def load_session(self):
         s = model.load_session(self.summary.path)
-        self.app.call_from_thread(self._populate, s)
+        subs = model.load_subagents(self.summary.path)
+        self.app.call_from_thread(self._populate, s, subs)
 
-    def _populate(self, s):
+    def _populate(self, s, subs):
         self.session = s
+        self.subs = subs
+        self.subs_by_uid = {sub.task_uid: sub for sub in subs if sub.task_uid}
         self.all_turns = list(s.turns)
         self.view = list(s.turns)
         self.bkts = s.buckets()
@@ -349,10 +358,11 @@ class SessionScreen(Sortable, Screen):
             f"out {human(s.out)} · peak-ctx [b]{s.ctx_peak:,}[/b] · "
             f"[b]${s.cost:,.2f}[/b]{flag} · {s.tok_per_s:.0f} tok/s · "
             f"[dim]g=stats⇄graphs · a=all turns · t=tools · m=MCP · "
-            f"Enter a turn for its commands[/dim]")
+            f"b=subagents · Enter a turn for its commands[/dim]")
         self.panel.update(self._panel_text())
         self._fill_buckets()
         self._fill_turns()
+        self.turn_table.focus()   # the visible table; bkt_table starts hidden
 
     def _panel_text(self):
         s, st = self.session, self.session.stats()
@@ -361,6 +371,13 @@ class SessionScreen(Sortable, Screen):
         mcp_serv = st.get("mcp_servers", {})
         mcp_str = ", ".join(f"{srv}×{n}" for srv, n in sorted(
             mcp_serv.items(), key=lambda kv: -kv[1])[:5]) or "none"
+        so = sum(x.out for x in self.subs)
+        sc = sum(x.cost for x in self.subs)
+        sub_line = (
+            f"[b]subagents[/b] {len(self.subs)} spawned · +{human(so)} out · "
+            f"[b]+${sc:,.2f}[/b]  [dim](press [b]b[/b] — their cost is NOT in the "
+            f"turn list / header above, which is the main thread only)[/dim]"
+            if self.subs else "[dim]no subagents spawned this session[/dim]")
         return "\n".join([
             f"[b]started[/b] {when(s.start)}    [b]ended[/b] {when(s.end)}    "
             f"([b]{s.wall / 60:.0f}m[/b] elapsed wall-clock)",
@@ -375,6 +392,8 @@ class SessionScreen(Sortable, Screen):
             f"self-corrections {st['self_corrections']}  ·  "
             f"error-turns {st['error_turns']} ({st['tool_errors']} tool errors)  ·  "
             f"retry-loops {st['loops']}  [dim](suspicion, not proof)[/dim]",
+            "",
+            sub_line,
             "",
             f"[b]skills used[/b]: {sk_str}",
             "",
@@ -417,6 +436,8 @@ class SessionScreen(Sortable, Screen):
         self.show_graphs = not self.show_graphs
         self.panel.display = not self.show_graphs
         self.bkt_table.display = self.show_graphs
+        # keep focus on a visible table so ←/→ act on what the user sees
+        (self.bkt_table if self.show_graphs else self.turn_table).focus()
 
     def action_all_turns(self):
         self.filter = None
@@ -439,6 +460,14 @@ class SessionScreen(Sortable, Screen):
             self.app.push_screen(McpScreen(self.session.session_id[:8],
                                            session=self.session))
 
+    def action_subagents(self):
+        if not self.session:
+            return
+        if not self.subs:
+            self.notify("no subagents spawned this session")
+            return
+        self.app.push_screen(SubagentsScreen(self.session.session_id[:8], self.subs))
+
     def on_data_table_header_selected(self, e):
         if e.data_table is not self.turn_table:
             return
@@ -458,17 +487,19 @@ class SessionScreen(Sortable, Screen):
                               f"{x['at'].strftime('%m-%d %H:%M')} ({len(self.view)} turns)")
             self._fill_turns()
         else:
-            self.app.push_screen(TurnScreen(self.session, self.view[int(e.row_key.value)]))
+            self.app.push_screen(TurnScreen(self.session, self.view[int(e.row_key.value)],
+                                            subagents=self.subs_by_uid))
 
 
 # --------------------------------------------------------------------------- #
 class TurnScreen(Screen):
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
 
-    def __init__(self, session, turn):
+    def __init__(self, session, turn, subagents=None):
         super().__init__()
         self.session = session
         self.turn = turn
+        self.subagents = subagents or {}   # Task tool_use id -> Subagent
 
     def compose(self):
         t = self.turn
@@ -510,7 +541,8 @@ class TurnScreen(Screen):
                 f"{fr_line}{err_line}{corr_line}{walk_line}\n"
                 f"[dim]exec = tool run · wall = call→next step · Δ = model think + "
                 f"idle after (AskUserQuestion exec = you answering) · "
-                f"Enter a command to see its full input + result[/dim]\n\n"
+                f"Enter a command for its full input + result "
+                f"(↳ = Task: drills into the subagent)[/dim]\n\n"
                 f"[b]prompt[/b]: {prompt[:300]}")
         yield VerticalScroll(Static(head))
         self.table = DataTable(cursor_type="row", zebra_stripes=True)
@@ -522,19 +554,27 @@ class TurnScreen(Screen):
         self.table.add_columns("#", "tool", "exec", "wall", "Δ", "summary")
         for i, c in enumerate(self.turn.tools):
             mark = " ✗" if c.is_error else ""
+            sub = " ↳" if c.uid in self.subagents else ""   # drills into the subagent
             delta = max(0.0, c.wall - c.dur)
-            self.table.add_row(str(i + 1), c.name + mark, f"{c.dur:.0f}s",
+            self.table.add_row(str(i + 1), c.name + mark + sub, f"{c.dur:.0f}s",
                                f"{c.wall:.0f}s", f"{delta:.0f}s", c.summary or "",
                                key=str(i))
         if not self.turn.tools:
             self.table.add_row("-", "(no tool calls)", "", "", "", "")
+        self.table.focus()   # not the VerticalScroll header, so ←/→ act on the rows
 
     def on_data_table_row_selected(self, e):
         if e.row_key.value is None:
             return
         idx = int(e.row_key.value)
-        if 0 <= idx < len(self.turn.tools):
-            self.app.push_screen(StepScreen(self.turn.tools[idx]))
+        if not (0 <= idx < len(self.turn.tools)):
+            return
+        c = self.turn.tools[idx]
+        sub = self.subagents.get(c.uid)
+        if sub and sub.turn:            # a Task call -> drill into the subagent's commands
+            self.app.push_screen(TurnScreen(sub.session, sub.turn))
+        else:
+            self.app.push_screen(StepScreen(c))
 
 
 # --------------------------------------------------------------------------- #
@@ -568,6 +608,50 @@ class StepScreen(Screen):
 
     def on_mount(self):
         self.sub_title = f"{self.call.name} — full step"
+
+
+# --------------------------------------------------------------------------- #
+class SubagentsScreen(Screen):
+    """The subagents a session spawned — each a mini-transcript you can drill into.
+
+    Their cost lives here, not in the parent's turn list (the session header is
+    the main thread only). Enter a row to see that subagent's tool calls.
+    """
+    BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
+
+    def __init__(self, title, subs):
+        super().__init__()
+        self.title_ = title
+        self.subs = subs
+
+    def compose(self):
+        tot_out = sum(s.out for s in self.subs)
+        tot_cost = sum(s.cost for s in self.subs)
+        yield Header()
+        yield Static(f"[b]{len(self.subs)} subagents[/b] · out {human(tot_out)} · "
+                     f"[b]${tot_cost:,.2f}[/b]  "
+                     f"[dim](Enter a subagent for its tool calls)[/dim]", id="head")
+        self.table = DataTable(cursor_type="row", zebra_stripes=True)
+        yield self.table
+        yield Footer()
+
+    def on_mount(self):
+        self.sub_title = f"{self.title_} subagents"
+        self.table.add_columns("#", "agent", "model", "task", "tools", "out", "$", "dur")
+        for i, s in enumerate(self.subs):
+            label = s.task_desc or (s.turn.prompt if s.turn else "") or "(no label)"
+            mdl = (s.model or "?").replace("claude-", "")
+            n_tools = len(s.turn.tools) if s.turn else 0
+            self.table.add_row(
+                str(i + 1), s.agent_id[:10], mdl[:12], label[:40], str(n_tools),
+                human(s.out), f"${s.cost:,.2f}", f"{s.dur:.0f}s", key=str(i))
+
+    def on_data_table_row_selected(self, e):
+        if e.row_key.value is None:
+            return
+        s = self.subs[int(e.row_key.value)]
+        if s.turn:
+            self.app.push_screen(TurnScreen(s.session, s.turn))
 
 
 # --------------------------------------------------------------------------- #
@@ -881,6 +965,13 @@ class McpScreen(Screen):
 
 # --------------------------------------------------------------------------- #
 class ClaudeTraceApp(App):
+    # left/right arrows walk the drill stack: → opens the highlighted row (= Enter),
+    # ← goes back (= Escape). priority=True so they fire even though a focused
+    # DataTable binds left/right itself (cursor moves, which row-cursor ignores).
+    BINDINGS = [
+        Binding("right", "nav_in", "Open", priority=True, show=False),
+        Binding("left", "nav_back", "Back", priority=True, show=False),
+    ]
     CSS = """
     #status { height: auto; color: $text-muted; padding: 0 1; }
     #head { height: auto; padding: 0 1; }
@@ -903,6 +994,17 @@ class ClaudeTraceApp(App):
                                            root=self.local_root, is_root=True))
         else:
             self.push_screen(ProjectsScreen(self.root))
+
+    def action_nav_in(self):
+        """→ : open the highlighted row, same as Enter on the focused table."""
+        w = self.focused
+        if isinstance(w, DataTable):
+            w.action_select_cursor()
+
+    def action_nav_back(self):
+        """← : go back one screen, but never pop the blank base (stack[0])."""
+        if len(self.screen_stack) > 2:
+            self.pop_screen()
 
 
 def run(root, local_root=None):

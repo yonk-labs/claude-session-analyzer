@@ -472,6 +472,102 @@ def load_session(path):
     return Session(path=path, project=proj, session_id=sid, model=model, turns=turns)
 
 
+@dataclass
+class Subagent:
+    """One subagent a session spawned: its parsed transcript + the Task call.
+
+    Claude Code writes each subagent to <sid>/subagents/agent-<agentId>.jsonl —
+    a normal transcript, so load_session parses it unchanged. A subagent has one
+    initiating prompt (the Task input) and can't take more user input, so it is
+    always a single turn holding all its tool calls.
+    """
+    agent_id: str
+    session: "Session"
+    task_uid: str = ""        # parent Task tool_use id (links to the spawning call)
+    task_desc: str = ""       # the Task call's description, for labeling
+
+    @property
+    def turn(self):
+        return self.session.turns[0] if self.session.turns else None
+
+    @property
+    def out(self):
+        return self.session.out
+
+    @property
+    def cost(self):
+        return self.session.cost
+
+    @property
+    def model(self):
+        return self.session.model
+
+    @property
+    def dur(self):
+        return sum(t.duration for t in self.session.turns)
+
+
+def subagent_files(main_path):
+    """The <sid>/subagents/*.jsonl files a session spawned, if any."""
+    d = Path(main_path).with_suffix("") / "subagents"
+    return sorted(d.glob("*.jsonl")) if d.is_dir() else []
+
+
+def _task_links(main_path):
+    """Map subagent agentId -> (task_uid, task_desc) from the parent transcript.
+
+    Each Task tool_result record carries toolUseResult.agentId; the same record's
+    tool_result block carries the spawning Task call's tool_use_id, whose input
+    description labels the subagent. Tool_use precedes its result in the file, so
+    one pass suffices.
+    """
+    main_path = Path(main_path)
+    links, desc_by_uid = {}, {}
+    if not main_path.is_file():
+        return links
+    with open(main_path, "r", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            content = (r.get("message") or {}).get("content")
+            blocks = content if isinstance(content, list) else []
+            for b in blocks:
+                if (isinstance(b, dict) and b.get("type") == "tool_use"
+                        and b.get("name") in ("Task", "Agent")):
+                    inp = b.get("input") or {}
+                    desc_by_uid[b.get("id")] = inp.get("description") or _tool_summary(inp)
+            tur = r.get("toolUseResult")
+            aid = tur.get("agentId") if isinstance(tur, dict) else None
+            if aid:
+                uid = next((b.get("tool_use_id", "") for b in blocks
+                            if isinstance(b, dict) and b.get("type") == "tool_result"), "")
+                links[aid] = (uid, desc_by_uid.get(uid, ""))
+    return links
+
+
+def load_subagents(main_path):
+    """Parse every subagent a session spawned, linked to its Task call.
+
+    Returns [] when none were spawned (or the main transcript is absent, e.g. a
+    worktree session whose main lives in another project dir). Ordered by spawn.
+    """
+    links = _task_links(main_path)
+    order = {aid: i for i, aid in enumerate(links)}
+    subs = []
+    for f in subagent_files(main_path):
+        aid = f.stem[len("agent-"):] if f.stem.startswith("agent-") else f.stem
+        uid, desc = links.get(aid, ("", ""))
+        subs.append(Subagent(agent_id=aid, session=load_session(f),
+                             task_uid=uid, task_desc=desc))
+    subs.sort(key=lambda s: order.get(s.agent_id, 10**9))   # stable: unknowns keep file order
+    return subs
+
+
 def _finalize(turn, tool_counts, result_ts):
     turn.looped = any(c >= 3 for c in tool_counts.values())
     # per-command time = tool-execution latency (result_ts - call_ts): the actual
