@@ -354,9 +354,9 @@ class SessionScreen(Nav, Sortable, Screen):
         ("#", lambda t: t.index, False),
         ("gap", lambda t: t.gap, True),
         ("dur", lambda t: t.duration, True),
-        ("out", lambda t: t.out, True),
+        ("out", lambda t: t.out + t.sub_out, True),
         ("ctx", lambda t: t.ctx, True),
-        ("$", lambda t: t.cost, True),
+        ("$", lambda t: t.cost + t.sub_cost, True),
         ("tok/s", lambda t: t.tok_per_s, True),
         ("tools", lambda t: len(t.tools), True),
         ("fric", lambda t: t.friction, True),
@@ -407,6 +407,18 @@ class SessionScreen(Nav, Sortable, Screen):
         self.session = s
         self.subs = subs
         self.subs_by_uid = {sub.task_uid: sub for sub in subs if sub.task_uid}
+        # fold each spawned subagent's out/cost into the main turn active when it
+        # ran, so the turn list's out/$ columns sum to the header total. Attributes
+        # by TIME (the turn whose [start,end] window holds the subagent's start) not
+        # tool-use-id: nested subagents are spawned from inside another subagent's
+        # transcript and aren't id-linkable from the main thread, but they still run
+        # during some main turn's wall-clock. Marked with ▸ in _fill_turns.
+        for sub in subs:
+            st = sub.session.turns[0].start if sub.session.turns else None
+            t = self._turn_at(s.turns, st) if st else None
+            if t is not None:
+                t.sub_out += sub.out
+                t.sub_cost += sub.cost
         self.all_turns = list(s.turns)
         self.view = list(s.turns)
         self.bkts = s.buckets()
@@ -427,6 +439,18 @@ class SessionScreen(Nav, Sortable, Screen):
         self._fill_turns()
         self.turn_table.focus()   # the visible table; bkt_table starts hidden
 
+    @staticmethod
+    def _turn_at(turns, ts):
+        """The main turn whose [start,end] window holds ts, else the latest turn
+        that started before it (turns are chronological)."""
+        best = None
+        for t in turns:
+            if t.start and t.start <= ts:
+                if t.end and ts <= t.end:
+                    return t
+                best = t
+        return best
+
     def _panel_text(self):
         s, st = self.session, self.session.stats()
         skills = sorted(st["skills"].items(), key=lambda kv: -kv[1])
@@ -438,8 +462,9 @@ class SessionScreen(Nav, Sortable, Screen):
         sc = sum(x.cost for x in self.subs)
         sub_line = (
             f"[b]subagents[/b] {len(self.subs)} spawned · +{human(so)} out · "
-            f"[b]+${sc:,.2f}[/b]  [dim](in the header total; main thread alone is "
-            f"{human(s.out)} / ${s.cost:,.2f} — press [b]b[/b] for the breakdown)[/dim]"
+            f"[b]+${sc:,.2f}[/b]  [dim](folded into the [b]▸[/b]-marked turns & the "
+            f"header total; main thread alone is {human(s.out)} / ${s.cost:,.2f} — "
+            f"press [b]b[/b] for the breakdown)[/dim]"
             if self.subs else "[dim]no subagents spawned this session[/dim]")
         return "\n".join([
             f"[b]started[/b] {when(s.start)}    [b]ended[/b] {when(s.end)}    "
@@ -490,9 +515,11 @@ class SessionScreen(Nav, Sortable, Screen):
                                         ("E", t.tool_errors >= 2),
                                         ("L", t.looped)] if x) or "·"
             sk = ",".join(sorted(x.split(":")[-1] for x in t.skills)) or "-"
+            mark = "▸" if t.sub_cost else ""    # ▸ = includes spawned-subagent cost
             self.turn_table.add_row(
-                str(t.index), f"{t.gap:.0f}s", f"{t.duration:.0f}s", human(t.out),
-                human(t.ctx), f"${t.cost:,.2f}", f"{t.tok_per_s:.0f}",
+                str(t.index), f"{t.gap:.0f}s", f"{t.duration:.0f}s",
+                human(t.out + t.sub_out) + mark,
+                human(t.ctx), f"${t.cost + t.sub_cost:,.2f}{mark}", f"{t.tok_per_s:.0f}",
                 str(len(t.tools)), fr, sk[:22], (t.prompt or "")[:64], key=str(i))
 
     def action_graphs(self):

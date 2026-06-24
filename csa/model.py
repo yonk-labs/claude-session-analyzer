@@ -163,6 +163,8 @@ class Turn:
     cost: float = 0.0
     tools: list = field(default_factory=list)        # list[ToolCall]
     skills: set = field(default_factory=set)
+    sub_out: int = 0                                  # out tok of subagents this turn spawned
+    sub_cost: float = 0.0                             # cost of subagents this turn spawned
     gap: float = 0.0                                  # seconds since prev turn end
     correction: bool = False                          # user pushed back next turn
     self_correct: bool = False                        # assistant walked it back
