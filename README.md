@@ -18,14 +18,27 @@ no extra capture step. The data is already there; this just reads it.
 ## Quickstart
 
 ```bash
-git clone git@github.com:yonk-labs/claude-session-analyzer.git
-cd claude-session-analyzer
-uv venv .venv && uv pip install --python .venv/bin/python -e .
-# or: python3 -m pip install -e .
+pipx install claude-session-analyzer       # recommended (isolated CLI)
+# or: uv tool install claude-session-analyzer
+# or: pip install claude-session-analyzer
 
 csa            # corpus profile: spend, bloat ratio, top sessions
 csa --tui      # the interactive browser (main surface)
 ```
+
+`csa` is a command-line app, so `pipx`/`uv tool` keep it out of your global
+site-packages — but plain `pip install claude-session-analyzer` works too.
+
+<details>
+<summary>From source (for development)</summary>
+
+```bash
+git clone git@github.com:yonk-labs/claude-session-analyzer.git
+cd claude-session-analyzer
+uv venv .venv && uv pip install --python .venv/bin/python -e .
+# or: python3 -m pip install -e .
+```
+</details>
 
 The text CLI is stdlib-only. The TUI's one dependency is
 [Textual](https://textual.textualize.io/).
