@@ -612,6 +612,7 @@ class SessionSummary:
     tmax: datetime = None
     files: int = 0
     hist: dict = field(default_factory=dict)   # tool-name -> calls (for tools view)
+    file_hist: dict = field(default_factory=dict)  # abs file_path -> read/edit/write calls
 
     @property
     def wall(self):
@@ -695,6 +696,18 @@ def scan_corpus(root):
                         if isinstance(blk, dict) and blk.get("type") == "tool_use":
                             nm = blk.get("name", "?")
                             s.hist[nm] = s.hist.get(nm, 0) + 1
+                            fp = (blk.get("input") or {}).get("file_path")
+                            if isinstance(fp, str) and fp:
+                                if nm in ("Read", "NotebookRead"):
+                                    op = "reads"
+                                elif nm in ("Edit", "NotebookEdit", "MultiEdit"):
+                                    op = "edits"
+                                elif nm == "Write":
+                                    op = "writes"
+                                else:
+                                    op = "other"
+                                e = s.file_hist.setdefault(fp, {"reads": 0, "edits": 0, "writes": 0, "other": 0})
+                                e[op] += 1
                     u, rid = msg.get("usage"), r.get("requestId")
                     if u and rid and rid not in seen:
                         seen.add(rid)

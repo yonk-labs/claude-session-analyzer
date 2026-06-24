@@ -14,7 +14,9 @@ Honest labels (abe review): tok/s is END-TO-END throughput, not decode speed;
 friction/regret is suspicion, not proof of harm.
 """
 import json
+import os
 from datetime import datetime
+from pathlib import Path
 
 from textual import work
 from textual.app import App
@@ -41,6 +43,22 @@ def when(dt):
 
 def short_proj(p, w=30):
     return model.pretty_project(p, w)
+
+
+def short_file(path, w=58):
+    """Collapse $HOME to ~ and keep the tail (filename) visible."""
+    p = path.replace(str(Path.home()), "~")
+    return p if len(p) <= w else "…" + p[-(w - 1):]
+
+
+def human_bytes(n):
+    if n is None:
+        return "gone"
+    if n >= 1 << 20:
+        return f"{n / (1 << 20):.1f}M"
+    if n >= 1 << 10:
+        return f"{n / (1 << 10):.0f}K"
+    return f"{n}B"
 
 
 def _bar(val, maxv, width=10):
@@ -887,6 +905,188 @@ class ToolsScreen(Sortable, Screen):
 
 
 # --------------------------------------------------------------------------- #
+class FileScreen(Sortable, Screen):
+    """Which files got read/edited/written most across the logs, with an on-disk
+    size estimate. 'reads' = tool calls naming that file_path (Read/Edit/Write/
+    NotebookEdit/MultiEdit + any MCP tool using file_path). Size/tokens are the
+    file's CURRENT on-disk size (~bytes/4) — it may have changed or been deleted
+    since the session, so this is an estimate, not what was actually in context."""
+    BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
+    COLS = [
+        ("file",   lambda r: r[0], False),
+        ("reads",  lambda r: r[1]["ops"]["reads"], True),
+        ("edits",  lambda r: r[1]["ops"]["edits"], True),
+        ("writes", lambda r: r[1]["ops"]["writes"], True),
+        ("other",  lambda r: r[1]["ops"]["other"], True),
+        ("total",  lambda r: r[1]["total"], True),
+        ("~size",  lambda r: r[1]["size"] or 0, True),
+        ("~tokens",lambda r: r[1]["size"] or 0, True),
+    ]
+
+    def __init__(self, scope, root):
+        super().__init__()
+        self.scope = scope
+        self.root = root
+        self.rows = []                          # list[(path, {"ops", "total", "size"})]
+        self.total = 1
+        self.sort_i, self.sort_rev = 5, True     # total desc
+
+    def compose(self):
+        yield Header()
+        self.status = Static("Scanning transcripts for file access…", id="status")
+        yield self.status
+        self.table = DataTable(cursor_type="row", zebra_stripes=True)
+        yield self.table
+        yield Footer()
+
+    def on_mount(self):
+        self.sub_title = f"files · {self.scope}"
+        self.table.add_columns("file", "reads", "edits", "writes", "other", "total", "~size", "~tok×ops")
+        self.load()
+
+    @work(thread=True, exclusive=True)
+    def load(self):
+        merged = {}   # path -> {"ops": {...}, "sessions": [(summary, ops)]}
+        for s in model.scan_corpus(self.root):
+            for path, ops in s.file_hist.items():
+                e = merged.setdefault(path, {
+                    "ops": {"reads": 0, "edits": 0, "writes": 0, "other": 0},
+                    "sessions": [],
+                })
+                for k in e["ops"]:
+                    e["ops"][k] += ops.get(k, 0)
+                e["sessions"].append((s, ops))
+        rows = []
+        for path, d in merged.items():
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = None
+            total = sum(d["ops"].values())
+            rows.append((path, {"ops": d["ops"], "total": total, "size": size,
+                                 "sessions": d["sessions"]}))
+        self.app.call_from_thread(self._populate, rows)
+
+    def _populate(self, rows):
+        self.rows = rows
+        self.total = sum(r[1]["total"] for r in rows) or 1
+        gone = sum(1 for r in rows if r[1]["size"] is None)
+        tot_tok = sum(r[1]["size"] for r in rows if r[1]["size"] is not None) / 4
+        gone_note = (f" · [dim]{gone} no longer on disk[/dim]") if gone else ""
+        if not rows:
+            self.status.update("[yellow]No file reads/edits recorded in this scope."
+                               "[/yellow]")
+        else:
+            self.status.update(
+                f"[b]{len(rows)}[/b] files · [b]{self.total:,}[/b] total accesses · "
+                f"~[b]{human(int(tot_tok))}[/b] tok on-disk content "
+                f"[dim](est, bytes/4 × ops; file may have changed since)[/dim]{gone_note} · "
+                f"[b]1-9[/b]/click header=sort")
+        self._fill()
+
+    def _fill(self):
+        self.rows.sort(key=self.COLS[self.sort_i][1], reverse=self.sort_rev)
+        self.table.clear()
+        m = max((r[1]["total"] for r in self.rows), default=1)
+        for path, d in self.rows:
+            ops, total, size = d["ops"], d["total"], d["size"]
+            tok = "?" if size is None else human(int(size / 4 * total))
+            self.table.add_row(
+                short_file(path),
+                str(ops["reads"]) if ops["reads"] else "-",
+                str(ops["edits"]) if ops["edits"] else "-",
+                str(ops["writes"]) if ops["writes"] else "-",
+                str(ops["other"]) if ops["other"] else "-",
+                f"{_bar(total, m, 8)} {total:,}",
+                human_bytes(size), tok)
+
+    def on_data_table_header_selected(self, e):
+        i = e.column_index
+        self.sort_rev = self.COLS[i][2] if i != self.sort_i else not self.sort_rev
+        self.sort_i = i
+        self._fill()
+
+    def on_data_table_row_selected(self, e):
+        if e.row_key.value is None:
+            return
+        path, d = self.rows[int(e.row_key.value)]
+        self.app.push_screen(FileSessionScreen(path, d["sessions"], d["size"]))
+
+
+# --------------------------------------------------------------------------- #
+class FileSessionScreen(Sortable, Screen):
+    """Per-session breakdown for one file: when it was accessed, by which project,
+    and how many reads/edits/writes per session. Enter a session to open it."""
+    BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
+    COLS = [
+        ("date",   lambda r: r[0].tmax or datetime.min, True),
+        ("project",lambda r: r[0].project, False),
+        ("reads",  lambda r: r[1].get("reads", 0), True),
+        ("edits",  lambda r: r[1].get("edits", 0), True),
+        ("writes", lambda r: r[1].get("writes", 0), True),
+        ("other",  lambda r: r[1].get("other", 0), True),
+        ("total",  lambda r: sum(r[1].values()), True),
+        ("~tok×ops", lambda r: sum(r[1].values()), True),  # placeholder; filled in _fill
+    ]
+
+    def __init__(self, path, sessions, size):
+        super().__init__()
+        self.path = path
+        self.sessions = sessions   # list[(SessionSummary, ops_dict)]
+        self.size = size
+        self.sort_i, self.sort_rev = 0, True   # date desc
+
+    def compose(self):
+        yield Header()
+        size_s = human_bytes(self.size)
+        tok_note = (f" · ~{human(int(self.size / 4))} tok/read"
+                    if self.size is not None else " · size unknown (gone)")
+        yield Static(
+            f"[b]{short_file(self.path)}[/b]  {size_s}{tok_note}\n"
+            f"[dim]{len(self.sessions)} session{'s' if len(self.sessions) != 1 else ''} "
+            f"accessed this file · Enter a session to open it · "
+            f"[b]1-9[/b]/click header=sort[/dim]",
+            id="head")
+        self.table = DataTable(cursor_type="row", zebra_stripes=True)
+        yield self.table
+        yield Footer()
+
+    def on_mount(self):
+        self.sub_title = short_file(self.path, 40)
+        self.table.add_columns("date", "project", "reads", "edits", "writes",
+                               "other", "total", "~tok×ops")
+        self._fill()
+
+    def _fill(self):
+        key = self.COLS[self.sort_i][1]
+        self.sessions.sort(key=lambda r: key(r), reverse=self.sort_rev)
+        self.table.clear()
+        tok_per_read = int(self.size / 4) if self.size is not None else None
+        for i, (s, ops) in enumerate(self.sessions):
+            total = sum(ops.values())
+            tok = "?" if tok_per_read is None else human(tok_per_read * total)
+            self.table.add_row(
+                when(s.tmax), short_proj(s.project, 36),
+                str(ops.get("reads", 0)) if ops.get("reads") else "-",
+                str(ops.get("edits", 0)) if ops.get("edits") else "-",
+                str(ops.get("writes", 0)) if ops.get("writes") else "-",
+                str(ops.get("other", 0)) if ops.get("other") else "-",
+                str(total), tok, key=str(i))
+
+    def on_data_table_header_selected(self, e):
+        i = e.column_index
+        self.sort_rev = self.COLS[i][2] if i != self.sort_i else not self.sort_rev
+        self.sort_i = i
+        self._fill()
+
+    def on_data_table_row_selected(self, e):
+        if e.row_key.value is None:
+            return
+        summary, _ = self.sessions[int(e.row_key.value)]
+        self.app.push_screen(SessionScreen(summary))
+
+
+# --------------------------------------------------------------------------- #
 class McpScreen(Screen):
     """MCP servers -> their tools. Two-level: list of servers on entry, drill in
     to see per-tool counts and out-tokens for that server."""
@@ -971,6 +1171,7 @@ class ClaudeTraceApp(App):
     BINDINGS = [
         Binding("right", "nav_in", "Open", priority=True, show=False),
         Binding("left", "nav_back", "Back", priority=True, show=False),
+        Binding("f", "files", "Files"),
     ]
     CSS = """
     #status { height: auto; color: $text-muted; padding: 0 1; }
@@ -1005,6 +1206,14 @@ class ClaudeTraceApp(App):
         """← : go back one screen, but never pop the blank base (stack[0])."""
         if len(self.screen_stack) > 2:
             self.pop_screen()
+
+    def action_files(self):
+        """f (any screen): corpus-wide file-access histogram + size estimate."""
+        if isinstance(self.screen, FileScreen):
+            return
+        root = self.local_root if self.local_root is not None else self.root
+        scope = "this directory" if self.local_root is not None else "all projects"
+        self.push_screen(FileScreen(scope, root))
 
 
 def run(root, local_root=None):

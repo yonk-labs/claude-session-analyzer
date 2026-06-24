@@ -185,6 +185,38 @@ def test_corpus_tool_hist():
     shutil.rmtree(d, ignore_errors=True)
 
 
+def test_corpus_file_hist():
+    """scan_corpus records a per-file access histogram from tool file_path inputs."""
+    import os
+    import shutil
+    d = tempfile.mkdtemp()
+    proj = os.path.join(d, "projects", "-p")
+    os.makedirs(proj)
+    rows = [
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
+                    "message": {"role": "user", "content": "go"}}),
+        json.dumps({"type": "assistant", "requestId": "r1",
+                    "timestamp": "2026-06-22T10:00:01.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [
+                                    {"type": "tool_use", "name": "Read",
+                                     "input": {"file_path": "/a.py"}},
+                                    {"type": "tool_use", "name": "Edit",
+                                     "input": {"file_path": "/a.py"}},
+                                    {"type": "tool_use", "name": "Bash",
+                                     "input": {"command": "ls"}}],
+                                "usage": {"output_tokens": 9, "input_tokens": 5}}}),
+    ]
+    with open(os.path.join(proj, "s.jsonl"), "w") as fh:
+        fh.write("\n".join(rows))
+    out = model.scan_corpus(os.path.join(d, "projects"))
+    assert out
+    fh = out[0].file_hist
+    assert "/a.py" in fh
+    assert fh["/a.py"] == {"reads": 1, "edits": 1, "writes": 0, "other": 0}  # Read + Edit, Bash excluded
+    shutil.rmtree(d, ignore_errors=True)
+
+
 def test_tool_timing():
     # ls gets a tool_result at +3 -> exec time 2s (not the 9s gap to `make`).
     # make has NO result -> falls back to gap-to-next (turn end) = 0s.
