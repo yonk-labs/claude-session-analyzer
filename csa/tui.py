@@ -67,6 +67,32 @@ def _bar(val, maxv, width=10):
     return "█" * n + " " * (width - n)
 
 
+class Nav:
+    """Drill-screen mixin. Records constructor args so forward-navigation can
+    rebuild a FRESH instance — Textual won't re-composite a screen instance once
+    it's been popped (it lands on the stack but the compositor never repaints it),
+    so re-pushing the same object silently freezes the view. clone() sidesteps it.
+    Also carries `crumb`: a short context label for the breadcrumb trail."""
+    crumb = ""
+
+    def __init_subclass__(cls, **kw):
+        super().__init_subclass__(**kw)
+        base = cls.__init__
+        def __init__(self, *a, _base=base, **k):
+            self._nav_args = (a, k)
+            _base(self, *a, **k)
+        cls.__init__ = __init__
+
+    def clone(self):
+        a, k = self._nav_args
+        return type(self)(*a, **k)
+
+    def crumbs(self):
+        """The breadcrumb trail: every stacked screen's crumb, joined."""
+        return "  ›  ".join(s.crumb for s in self.app.screen_stack
+                            if getattr(s, "crumb", ""))
+
+
 class Sortable:
     """Keyboard sort for table screens: press 1-9 to sort by that column (press
     the same number again to reverse). Mouse: click the header. Screens expose
@@ -88,7 +114,7 @@ class Sortable:
 
 
 # --------------------------------------------------------------------------- #
-class ProjectsScreen(Sortable, Screen):
+class ProjectsScreen(Nav, Sortable, Screen):
     """Landing screen: sessions rolled up per project. Enter a project to see its
     sessions, or 'a' for every session across all projects."""
     BINDINGS = [("q", "app.quit", "Quit"), ("a", "all_sessions", "All sessions"),
@@ -185,7 +211,7 @@ class ProjectsScreen(Sortable, Screen):
 
 
 # --------------------------------------------------------------------------- #
-class BrowserScreen(Sortable, Screen):
+class BrowserScreen(Nav, Sortable, Screen):
     """A list of sessions — either a pre-scanned subset (one project / all), or
     scanned from `root` (used by --local). is_root=True means Esc quits."""
     BINDINGS = [("escape", "back", "Back"), ("q", "app.quit", "Quit"),
@@ -315,7 +341,7 @@ class BrowserScreen(Sortable, Screen):
 
 
 # --------------------------------------------------------------------------- #
-class SessionScreen(Sortable, Screen):
+class SessionScreen(Nav, Sortable, Screen):
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit"),
                 ("g", "graphs", "Stats ⇄ graphs"),
                 ("a", "all_turns", "All turns"), ("t", "tools", "Tools"),
@@ -518,7 +544,7 @@ class SessionScreen(Sortable, Screen):
 
 
 # --------------------------------------------------------------------------- #
-class TurnScreen(Screen):
+class TurnScreen(Nav, Screen):
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
 
     def __init__(self, session, turn, subagents=None):
@@ -604,7 +630,7 @@ class TurnScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-class StepScreen(Screen):
+class StepScreen(Nav, Screen):
     """Full detail of one command/step: its complete input and (capped) result."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
 
@@ -637,7 +663,7 @@ class StepScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-class SubagentsScreen(Screen):
+class SubagentsScreen(Nav, Screen):
     """The subagents a session spawned — each a mini-transcript you can drill into.
 
     Their cost lives here, not in the parent's turn list (the session header is
@@ -681,7 +707,7 @@ class SubagentsScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-class SkillScreen(Sortable, Screen):
+class SkillScreen(Nav, Sortable, Screen):
     """Corpus-wide per-skill regret leaderboard. Suspicion, not proof."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
     COLS = [
@@ -772,7 +798,7 @@ class SkillScreen(Sortable, Screen):
 
 
 # --------------------------------------------------------------------------- #
-class SkillDetailScreen(Screen):
+class SkillDetailScreen(Nav, Screen):
     """What a skill ACTUALLY does, observed from the traces (not its SKILL.md)."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
 
@@ -862,7 +888,7 @@ class SkillDetailScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-class ToolsScreen(Sortable, Screen):
+class ToolsScreen(Nav, Sortable, Screen):
     """Which tools were called and how often — for a session or a group."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
     COLS = [("tool", lambda r: r[0], False),
@@ -913,7 +939,7 @@ class ToolsScreen(Sortable, Screen):
 
 
 # --------------------------------------------------------------------------- #
-class FileScreen(Sortable, Screen):
+class FileScreen(Nav, Sortable, Screen):
     """Which files got read/edited/written most across the logs, with an on-disk
     size estimate. 'reads' = tool calls naming that file_path (Read/Edit/Write/
     NotebookEdit/MultiEdit + any MCP tool using file_path). Size/tokens are the
@@ -1004,7 +1030,7 @@ class FileScreen(Sortable, Screen):
         self.rows.sort(key=self.COLS[self.sort_i][1], reverse=self.sort_rev)
         self.table.clear()
         m = max((r[1]["total"] for r in self.rows), default=1)
-        for path, d in self.rows:
+        for i, (path, d) in enumerate(self.rows):
             ops, total, size = d["ops"], d["total"], d["size"]
             tok = "?" if size is None else human(int(size / 4 * total))
             self.table.add_row(
@@ -1014,7 +1040,7 @@ class FileScreen(Sortable, Screen):
                 str(ops["writes"]) if ops["writes"] else "-",
                 str(ops["other"]) if ops["other"] else "-",
                 f"{_bar(total, m, 8)} {total:,}",
-                human_bytes(size), tok)
+                human_bytes(size), tok, key=str(i))
 
     def on_data_table_header_selected(self, e):
         i = e.column_index
@@ -1030,7 +1056,7 @@ class FileScreen(Sortable, Screen):
 
 
 # --------------------------------------------------------------------------- #
-class FileSessionScreen(Sortable, Screen):
+class FileSessionScreen(Nav, Sortable, Screen):
     """Per-session breakdown for one file: when it was accessed, by which project,
     and how many reads/edits/writes per session. Enter a session to open it."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
@@ -1049,14 +1075,14 @@ class FileSessionScreen(Sortable, Screen):
         super().__init__()
         self.path = path
         self.sessions = sessions   # list[(SessionSummary, ops_dict)]
-        self.size = size
+        self.fsize = size          # NOT self.size — Screen.size is a read-only property
         self.sort_i, self.sort_rev = 0, True   # date desc
 
     def compose(self):
         yield Header()
-        size_s = human_bytes(self.size)
-        tok_note = (f" · ~{human(int(self.size / 4))} tok/read"
-                    if self.size is not None else " · size unknown (gone)")
+        size_s = human_bytes(self.fsize)
+        tok_note = (f" · ~{human(int(self.fsize / 4))} tok/read"
+                    if self.fsize is not None else " · size unknown (gone)")
         yield Static(
             f"[b]{short_file(self.path)}[/b]  {size_s}{tok_note}\n"
             f"[dim]{len(self.sessions)} session{'s' if len(self.sessions) != 1 else ''} "
@@ -1077,7 +1103,7 @@ class FileSessionScreen(Sortable, Screen):
         key = self.COLS[self.sort_i][1]
         self.sessions.sort(key=lambda r: key(r), reverse=self.sort_rev)
         self.table.clear()
-        tok_per_read = int(self.size / 4) if self.size is not None else None
+        tok_per_read = int(self.fsize / 4) if self.fsize is not None else None
         for i, (s, ops) in enumerate(self.sessions):
             total = sum(ops.values())
             tok = "?" if tok_per_read is None else human(tok_per_read * total)
@@ -1103,7 +1129,7 @@ class FileSessionScreen(Sortable, Screen):
 
 
 # --------------------------------------------------------------------------- #
-class McpScreen(Screen):
+class McpScreen(Nav, Screen):
     """MCP servers -> their tools. Two-level: list of servers on entry, drill in
     to see per-tool counts and out-tokens for that server."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
@@ -1237,11 +1263,11 @@ class ClaudeTraceApp(App):
             self.pop_screen()
 
     def action_nav_fwd(self):
-        """→ : go forward through history (if any), otherwise no-op."""
+        """→ : go forward through history (if any), otherwise no-op. Rebuilds a
+        fresh screen — a popped Textual instance won't repaint when re-pushed."""
         if self._fwd:
-            # bypass our push_screen override so we don't clear remaining _fwd
             s = self._fwd.pop()
-            super().push_screen(s)
+            super().push_screen(s.clone() if hasattr(s, "clone") else s)
 
     def action_refresh(self):
         """r : clear corpus cache and reload current screen's data."""
