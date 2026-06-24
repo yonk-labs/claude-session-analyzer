@@ -771,14 +771,17 @@ class SkillScreen(Nav, Sortable, Screen):
         self.rows = []
         self.load()
 
+    def reload(self):
+        self.load()
+
     @work(thread=True, exclusive=True)
     def load(self):
         def prog(n, total):
             if n % 150 == 0 or n == total:
                 self.app.call_from_thread(self.status.update,
                                           f"Analyzing {self.source}… {n}/{total} transcripts")
-        agg = model.scan_skill_regret(root=self.root, paths=self.paths,
-                                      source=self.source, progress=prog)
+        agg = self.app.cached_skill_regret(self.root, self.paths, self.source,
+                                           progress=prog)
         self.app.call_from_thread(self._populate, agg)
 
     def _populate(self, agg):
@@ -1283,18 +1286,33 @@ class ClaudeTraceApp(App):
         self.local_root = local_root
         self._fwd: list = []          # browser-style forward history
         self._corpus_cache: dict = {} # root str -> [SessionSummary]; wiped by r
-        self._corpus_lock = threading.Lock()
+        self._skill_cache: dict = {}  # (scope, source) -> regret agg; wiped by r
+        self._cache_lock = threading.Lock()
 
     def cached_corpus(self, root) -> list:
         """Return cached scan_corpus(root), scanning if needed. Thread-safe."""
         key = str(root)
-        with self._corpus_lock:
+        with self._cache_lock:
             if key in self._corpus_cache:
                 return self._corpus_cache[key]
         rows = model.scan_corpus(root)
-        with self._corpus_lock:
+        with self._cache_lock:
             self._corpus_cache[key] = rows
         return rows
+
+    def cached_skill_regret(self, root, paths, source, progress=None) -> dict:
+        """Cached scan_skill_regret keyed by (scope, source). The blast/both
+        scans are the heaviest in the app, so a cache hit makes the 'b' toggle
+        instant after each source is scanned once. Wiped by 'r'."""
+        key = (str(root), tuple(map(str, paths)) if paths else None, source)
+        with self._cache_lock:
+            if key in self._skill_cache:
+                return self._skill_cache[key]
+        agg = model.scan_skill_regret(root=root, paths=paths, source=source,
+                                      progress=progress)
+        with self._cache_lock:
+            self._skill_cache[key] = agg
+        return agg
 
     def push_screen(self, screen, *args, **kwargs):
         """Any new navigation clears forward history (like a browser)."""
@@ -1322,8 +1340,10 @@ class ClaudeTraceApp(App):
             super().push_screen(s.clone() if hasattr(s, "clone") else s)
 
     def action_refresh(self):
-        """r : clear corpus cache and reload current screen's data."""
-        self._corpus_cache.clear()
+        """r : clear caches and reload current screen's data."""
+        with self._cache_lock:
+            self._corpus_cache.clear()
+            self._skill_cache.clear()
         if hasattr(self.screen, "reload"):
             self.screen.reload()
 
