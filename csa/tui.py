@@ -145,6 +145,7 @@ class ProjectsScreen(Nav, Sortable, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = "projects"
         self.sub_title = "projects"
         self.table.add_columns(*[c[0] for c in self.COLS])
         self.load()
@@ -246,7 +247,8 @@ class BrowserScreen(Nav, Sortable, Screen):
         yield Footer()
 
     def on_mount(self):
-        self.sub_title = self.title_
+        self.crumb = self.title_           # the trail (set as title) already shows this
+        self.title = self.crumbs()
         self.table.add_columns(*[c[0] for c in self.COLS])
         if self.scan_root is not None:
             self.status.update("Scanning transcripts…")
@@ -388,6 +390,8 @@ class SessionScreen(Nav, Sortable, Screen):
         self.bkt_table.add_columns("when", "tokens", "spend", "turns")
         self.turn_table.add_columns(*[c[0] for c in self.COLS])
         self.bkt_table.display = False     # start on the stats panel; g toggles
+        self.crumb = self.summary.session_id[:8]
+        self.title = self.crumbs()
         self.sub_title = short_proj(self.summary.project, 40)
         self.load_session()
 
@@ -602,6 +606,8 @@ class TurnScreen(Nav, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = f"turn {self.turn.index}"
+        self.title = self.crumbs()
         self.sub_title = f"turn {self.turn.index} commands"
         self.table.add_columns("#", "tool", "exec", "wall", "Δ", "summary")
         for i, c in enumerate(self.turn.tools):
@@ -659,6 +665,8 @@ class StepScreen(Nav, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = self.call.name
+        self.title = self.crumbs()
         self.sub_title = f"{self.call.name} — full step"
 
 
@@ -688,6 +696,8 @@ class SubagentsScreen(Nav, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = "subagents"
+        self.title = self.crumbs()
         self.sub_title = f"{self.title_} subagents"
         self.table.add_columns("#", "agent", "model", "task", "tools", "out", "$", "dur")
         for i, s in enumerate(self.subs):
@@ -736,6 +746,8 @@ class SkillScreen(Nav, Sortable, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = "skills"
+        self.title = self.crumbs()
         self.sub_title = f"skill regret · {self.scope}" if self.scope else "skill regret"
         self.table.add_columns(*[c[0] for c in self.COLS])
         self.load()
@@ -873,6 +885,8 @@ class SkillDetailScreen(Nav, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = str(self.skill)
+        self.title = self.crumbs()
         self.sub_title = "what this skill really does"
         self.table.add_columns("tool", "calls", "exec", "wall", "out tok", "% of its tool use")
         hist = self.data["hist"]
@@ -917,6 +931,8 @@ class ToolsScreen(Nav, Sortable, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = "tools"
+        self.title = self.crumbs()
         self.sub_title = "tools called"
         cols = ["tool", "calls", "out tok", "% of all calls"]
         self.table.add_columns(*cols)
@@ -975,6 +991,8 @@ class FileScreen(Nav, Sortable, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = "files"
+        self.title = self.crumbs()
         self.sub_title = f"files · {self.scope}"
         self.table.add_columns("file", "reads", "edits", "writes", "other", "total", "~size", "~tok×ops")
         self.load()
@@ -1094,6 +1112,8 @@ class FileSessionScreen(Nav, Sortable, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = short_file(self.path, 24)
+        self.title = self.crumbs()
         self.sub_title = short_file(self.path, 40)
         self.table.add_columns("date", "project", "reads", "edits", "writes",
                                "other", "total", "~tok×ops")
@@ -1193,6 +1213,8 @@ class McpScreen(Nav, Screen):
         yield Footer()
 
     def on_mount(self):
+        self.crumb = "MCP"
+        self.title = self.crumbs()
         self.sub_title = "MCP servers"
         self.table.add_columns("server", "calls", "out tok", "share")
         calls, outs, _ = self._aggregate()
