@@ -1,0 +1,42 @@
+name: release
+
+# Publish to PyPI via Trusted Publishing (OIDC — no API token stored).
+# Fires when you push a version tag, e.g.  git tag v0.1.0 && git push --tag
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Build
+        run: uv build
+      - name: Check metadata
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Must match the "Environment name" you set on PyPI's publisher form.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/claude-session-analyzer
+    permissions:
+      id-token: write          # required for Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
