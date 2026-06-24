@@ -123,6 +123,7 @@ class ProjectsScreen(Nav, Sortable, Screen):
     COLS = [
         ("project", lambda d: d["project"], False),
         ("sessions", lambda d: d["sessions"], True),
+        ("subagents", lambda d: d["subagents"], True),
         ("$", lambda d: d["cost"], True),
         ("out", lambda d: d["out"], True),
         ("in+cache", lambda d: d["ctx_in"], True),
@@ -134,7 +135,7 @@ class ProjectsScreen(Nav, Sortable, Screen):
         self.root = root
         self.summaries = []
         self.rows = []
-        self.sort_i, self.sort_rev = 2, True   # $ desc
+        self.sort_i, self.sort_rev = 3, True   # $ desc (col 3 after subagents)
 
     def compose(self):
         yield Header()
@@ -175,6 +176,7 @@ class ProjectsScreen(Nav, Sortable, Screen):
         for i, d in enumerate(self.rows):
             self.table.add_row(
                 short_proj(d["project"], 46), str(d["sessions"]),
+                str(d["subagents"]) if d["subagents"] else "-",
                 f"${d['cost']:,.2f}", human(d["out"]), human(d["ctx_in"]),
                 when(d["tmax"]), key=str(i))
 

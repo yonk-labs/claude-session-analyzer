@@ -611,6 +611,7 @@ class SessionSummary:
     tmin: datetime = None
     tmax: datetime = None
     files: int = 0
+    subagents: int = 0    # spawned subagent transcripts folded into this session
     hist: dict = field(default_factory=dict)   # tool-name -> calls (for tools view)
     file_hist: dict = field(default_factory=dict)  # abs file_path -> read/edit/write calls
 
@@ -642,8 +643,10 @@ def project_totals(summaries):
     by = {}
     for s in summaries:
         p = by.setdefault(s.project, {"project": s.project, "sessions": 0,
-                                      "cost": 0.0, "out": 0, "ctx_in": 0, "tmax": None})
+                                      "subagents": 0, "cost": 0.0, "out": 0,
+                                      "ctx_in": 0, "tmax": None})
         p["sessions"] += 1
+        p["subagents"] += s.subagents
         p["cost"] += s.cost
         p["out"] += s.out
         p["ctx_in"] += s.ctx_in
@@ -669,6 +672,8 @@ def scan_corpus(root):
             sessions[(proj, sid)] = s
         s.files += 1
         is_main = path.name == f"{sid}.jsonl"
+        if not is_main:
+            s.subagents += 1          # a spawned subagent transcript
         seen = set()
         try:
             fh = open(path, "r", errors="replace")
