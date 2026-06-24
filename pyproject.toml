@@ -2,9 +2,30 @@
 name = "claude-session-analyzer"
 version = "0.1.0"
 description = "Understand your Claude Code usage: token/cost/time analysis and a TUI over local JSONL transcripts."
+readme = "README.md"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "The Yonk", email = "matt@theyonk.com" }]
+keywords = ["claude", "claude-code", "anthropic", "tui", "tokens", "cost", "llm", "observability"]
 dependencies = ["textual>=8"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/yonk-labs/claude-session-analyzer"
+Repository = "https://github.com/yonk-labs/claude-session-analyzer"
+Issues = "https://github.com/yonk-labs/claude-session-analyzer/issues"
 
 [project.scripts]
 csa = "csa.cli:main"
