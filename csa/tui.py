@@ -411,10 +411,15 @@ class SessionScreen(Nav, Sortable, Screen):
         self.view = list(s.turns)
         self.bkts = s.buckets()
         flag = " (cost est.)" if pricing.is_estimate(s.model) else ""
+        # header total includes subagents, to match the Browser/Projects rollups
+        # (which fold them in); the breakdown lives in the panel + 'b' view.
+        sub_out = sum(x.out for x in self.subs)
+        sub_cost = sum(x.cost for x in self.subs)
+        incl = f" [dim](incl. {len(self.subs)} subagents)[/dim]" if self.subs else ""
         self.head.update(
             f"[b]{s.session_id[:8]}[/b] · {s.model or '?'} · {len(s.turns)} turns · "
-            f"out {human(s.out)} · peak-ctx [b]{s.ctx_peak:,}[/b] · "
-            f"[b]${s.cost:,.2f}[/b]{flag} · {s.tok_per_s:.0f} tok/s · "
+            f"out {human(s.out + sub_out)} · peak-ctx [b]{s.ctx_peak:,}[/b] · "
+            f"[b]${s.cost + sub_cost:,.2f}[/b]{flag}{incl} · {s.tok_per_s:.0f} tok/s · "
             f"[dim]g=stats⇄graphs · a=all turns · t=tools · m=MCP · "
             f"b=subagents · Enter a turn for its commands[/dim]")
         self.panel.update(self._panel_text())
@@ -433,8 +438,8 @@ class SessionScreen(Nav, Sortable, Screen):
         sc = sum(x.cost for x in self.subs)
         sub_line = (
             f"[b]subagents[/b] {len(self.subs)} spawned · +{human(so)} out · "
-            f"[b]+${sc:,.2f}[/b]  [dim](press [b]b[/b] — their cost is NOT in the "
-            f"turn list / header above, which is the main thread only)[/dim]"
+            f"[b]+${sc:,.2f}[/b]  [dim](in the header total; main thread alone is "
+            f"{human(s.out)} / ${s.cost:,.2f} — press [b]b[/b] for the breakdown)[/dim]"
             if self.subs else "[dim]no subagents spawned this session[/dim]")
         return "\n".join([
             f"[b]started[/b] {when(s.start)}    [b]ended[/b] {when(s.end)}    "
