@@ -1256,8 +1256,8 @@ class ClaudeTraceApp(App):
         screen = self.screen
         root = self.local_root if self.local_root is not None else self.root
         if isinstance(screen, SessionScreen):
-            self.push_screen(FileScreen(screen.session.session_id[:8],
-                                        root, summaries=[screen.session]))
+            self.push_screen(FileScreen(screen.summary.session_id[:8],
+                                        root, summaries=[screen.summary]))
         elif isinstance(screen, BrowserScreen) and screen.summaries:
             self.push_screen(FileScreen(screen.title_, root,
                                         summaries=screen.summaries))
