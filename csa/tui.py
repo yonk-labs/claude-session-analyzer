@@ -15,6 +15,7 @@ friction/regret is suspicion, not proof of harm.
 """
 import json
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -124,8 +125,11 @@ class ProjectsScreen(Sortable, Screen):
 
     @work(thread=True, exclusive=True)
     def load(self):
-        rows = model.scan_corpus(self.root)
+        rows = self.app.cached_corpus(self.root)
         self.app.call_from_thread(self._populate, rows)
+
+    def reload(self):
+        self.load()
 
     def _populate(self, summaries):
         self.summaries = summaries
@@ -232,8 +236,12 @@ class BrowserScreen(Sortable, Screen):
 
     @work(thread=True, exclusive=True)
     def load_data(self):
-        rows = model.scan_corpus(self.scan_root)
+        rows = self.app.cached_corpus(self.scan_root)
         self.app.call_from_thread(self._set_rows, rows)
+
+    def reload(self):
+        if self.scan_root is not None:
+            self.load_data()
 
     def _set_rows(self, rows):
         self.summaries = rows
@@ -923,10 +931,11 @@ class FileScreen(Sortable, Screen):
         ("~tokens",lambda r: r[1]["size"] or 0, True),
     ]
 
-    def __init__(self, scope, root):
+    def __init__(self, scope, root, summaries=None):
         super().__init__()
         self.scope = scope
         self.root = root
+        self._summaries = summaries  # if set, skip scan; scope to these sessions
         self.rows = []                          # list[(path, {"ops", "total", "size"})]
         self.total = 1
         self.sort_i, self.sort_rev = 5, True     # total desc
@@ -944,10 +953,17 @@ class FileScreen(Sortable, Screen):
         self.table.add_columns("file", "reads", "edits", "writes", "other", "total", "~size", "~tok×ops")
         self.load()
 
+    def reload(self):
+        self.rows = []
+        self.table.clear()
+        self.status.update("Scanning transcripts for file access…")
+        self.load()
+
     @work(thread=True, exclusive=True)
     def load(self):
         merged = {}   # path -> {"ops": {...}, "sessions": [(summary, ops)]}
-        for s in model.scan_corpus(self.root):
+        source = self._summaries if self._summaries is not None else self.app.cached_corpus(self.root)
+        for s in source:
             for path, ops in s.file_hist.items():
                 e = merged.setdefault(path, {
                     "ops": {"reads": 0, "edits": 0, "writes": 0, "other": 0},
@@ -1165,13 +1181,13 @@ class McpScreen(Screen):
 
 # --------------------------------------------------------------------------- #
 class ClaudeTraceApp(App):
-    # left/right arrows walk the drill stack: → opens the highlighted row (= Enter),
-    # ← goes back (= Escape). priority=True so they fire even though a focused
-    # DataTable binds left/right itself (cursor moves, which row-cursor ignores).
+    # ← / → are browser-style history back/forward (priority=True beats DataTable).
+    # Enter / click drill into rows. r=refresh cache. f=file histogram.
     BINDINGS = [
-        Binding("right", "nav_in", "Open", priority=True, show=False),
-        Binding("left", "nav_back", "Back", priority=True, show=False),
+        Binding("right", "nav_fwd", "→", priority=True, show=False),
+        Binding("left",  "nav_back", "←", priority=True, show=False),
         Binding("f", "files", "Files"),
+        Binding("r", "refresh", "Refresh"),
     ]
     CSS = """
     #status { height: auto; color: $text-muted; padding: 0 1; }
@@ -1187,33 +1203,67 @@ class ClaudeTraceApp(App):
         super().__init__()
         self.root = root
         self.local_root = local_root
+        self._fwd: list = []          # browser-style forward history
+        self._corpus_cache: dict = {} # root str -> [SessionSummary]; wiped by r
+        self._corpus_lock = threading.Lock()
+
+    def cached_corpus(self, root) -> list:
+        """Return cached scan_corpus(root), scanning if needed. Thread-safe."""
+        key = str(root)
+        with self._corpus_lock:
+            if key in self._corpus_cache:
+                return self._corpus_cache[key]
+        rows = model.scan_corpus(root)
+        with self._corpus_lock:
+            self._corpus_cache[key] = rows
+        return rows
+
+    def push_screen(self, screen, *args, **kwargs):
+        """Any new navigation clears forward history (like a browser)."""
+        self._fwd.clear()
+        return super().push_screen(screen, *args, **kwargs)
 
     def on_mount(self):
         if self.local_root is not None:
-            # --local: skip the projects list, land on this directory's sessions
             self.push_screen(BrowserScreen("this directory",
                                            root=self.local_root, is_root=True))
         else:
             self.push_screen(ProjectsScreen(self.root))
 
-    def action_nav_in(self):
-        """→ : open the highlighted row, same as Enter on the focused table."""
-        w = self.focused
-        if isinstance(w, DataTable):
-            w.action_select_cursor()
-
     def action_nav_back(self):
-        """← : go back one screen, but never pop the blank base (stack[0])."""
+        """← : go back; save current screen for forward navigation."""
         if len(self.screen_stack) > 2:
+            self._fwd.append(self.screen)
             self.pop_screen()
 
+    def action_nav_fwd(self):
+        """→ : go forward through history (if any), otherwise no-op."""
+        if self._fwd:
+            # bypass our push_screen override so we don't clear remaining _fwd
+            Screen = self._fwd.pop()
+            super().push_screen(Screen)
+
+    def action_refresh(self):
+        """r : clear corpus cache and reload current screen's data."""
+        self._corpus_cache.clear()
+        if hasattr(self.screen, "reload"):
+            self.screen.reload()
+
     def action_files(self):
-        """f (any screen): corpus-wide file-access histogram + size estimate."""
+        """f : file histogram scoped to the current context (session/project/all)."""
         if isinstance(self.screen, FileScreen):
             return
+        screen = self.screen
         root = self.local_root if self.local_root is not None else self.root
-        scope = "this directory" if self.local_root is not None else "all projects"
-        self.push_screen(FileScreen(scope, root))
+        if isinstance(screen, SessionScreen):
+            self.push_screen(FileScreen(screen.session.session_id[:8],
+                                        root, summaries=[screen.session]))
+        elif isinstance(screen, BrowserScreen) and screen.summaries:
+            self.push_screen(FileScreen(screen.title_, root,
+                                        summaries=screen.summaries))
+        else:
+            scope = "this directory" if self.local_root is not None else "all projects"
+            self.push_screen(FileScreen(scope, root))
 
 
 def run(root, local_root=None):
