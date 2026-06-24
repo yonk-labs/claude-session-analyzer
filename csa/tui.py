@@ -721,8 +721,8 @@ class SkillScreen(Nav, Sortable, Screen):
     """Corpus-wide per-skill regret leaderboard. Suspicion, not proof.
     'b' cycles which transcripts count: main / subagents / both."""
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit"),
-                ("b", "cycle_source", "main/subagent/both")]
-    SOURCES = ("main", "subagents", "both")
+                ("b", "cycle_source", "source: main/sub/both/blast")]
+    SOURCES = ("main", "subagents", "both", "blast")
     COLS = [
         ("skill", lambda r: r[0], False),
         ("turns", lambda r: r[1]["fires"], True),
@@ -786,12 +786,14 @@ class SkillScreen(Nav, Sortable, Screen):
         low = sum(1 for _, a in self.rows if a["fires"] < 5)
         low_note = (f" · [dim]{low} skill{'s' if low != 1 else ''} fired <5× "
                     f"(regret% dimmed, sunk in sort)[/dim]") if low else ""
+        blast_note = (" [cyan]blast[/cyan]=out/tools include subagents each skill "
+                      "spawned." if self.source == "blast" else "")
         self.status.update(
             f"source [b]{self.source}[/b] · [b]turns[/b]=turns the skill ran · "
             "[b]tools[/b]=tool calls it triggered · "
             "[b]asks[/b]=times it asked YOU a question · [b]regret%[/b]=turns with "
             "friction [dim](correlation, not proof)[/dim]. Enter a skill for detail · "
-            "[b]b[/b]=main/subagent/both." + low_note)
+            "[b]b[/b]=main/sub/both/blast." + blast_note + low_note)
         self._fill()
 
     def _fill(self):
@@ -859,6 +861,14 @@ class SkillDetailScreen(Nav, Screen):
                         f" · {inj} load{'s' if inj != 1 else ''} seen{heavy}")
         secs = a.get("secs", 0.0)
         tstr = f"{secs / 60:.0f}m" if secs >= 120 else f"{secs:.0f}s"
+        sub_out = a.get("sub_out", 0)
+        sub_tools = a.get("sub_tools", 0)
+        blast_line = ""
+        if sub_out or sub_tools:
+            blast_line = (f"\n[cyan]blast radius[/cyan]: of the above, "
+                          f"[b]{human(sub_out)}[/b] out tok and [b]{sub_tools}[/b] "
+                          f"tool calls came from subagents this skill spawned "
+                          f"[dim](shown in 'blast' source only)[/dim]")
         # friction breakdown — show WHERE the regret came from so 100% from one
         # correction is read as different from 100% from twelve tool errors
         corr = a.get("corrections", 0)
@@ -892,7 +902,7 @@ class SkillDetailScreen(Nav, Screen):
                 f"({secs / fires:.0f}s/turn) · generated [b]{human(a['out'])}[/b] "
                 f"output tok · triggered [b]{a['tools']}[/b] tool calls "
                 f"({per_turn:.1f}/turn) · friction in {pct_s} of its turns "
-                f"[dim](suspicion)[/dim]{bd_line}{inj_line}{ask_note}\n\n"
+                f"[dim](suspicion)[/dim]{bd_line}{blast_line}{inj_line}{ask_note}\n\n"
                 f"[b]What it actually triggers[/b] — calls · exec vs wall "
                 f"[dim](wall−exec = model think after; AskUserQuestion exec = "
                 f"you answering)[/dim]:")

@@ -734,13 +734,15 @@ def scan_skill_regret(root=None, progress=None, paths=None, source="main"):
     """Per-skill regret by loading transcripts. Scope with `root` (all projects
     under it) or an explicit `paths` list (e.g. one project's sessions).
 
-    `source` picks which transcripts to read:
+    `source` picks which transcripts to read and how to attribute them:
       "main"      — only the top-level session transcripts (default)
       "subagents" — only the transcripts of subagents those sessions spawned
-      "both"      — main + subagent transcripts, folded together
-    Subagents run skills too (same attributionSkill parsing); the default "main"
-    matches the rest of the Skills view's history, "subagents"/"both" surface
-    skill usage that happened inside spawned agents.
+      "both"      — main + subagent transcripts, each attributed to its own skill
+      "blast"     — main transcripts, but each skill is ALSO credited with the
+                    out/tools of subagents its turns spawned (its blast radius)
+    Subagents run skills too (same attributionSkill parsing); "main" matches the
+    rest of the Skills view's history, "subagents"/"both" surface skill usage
+    inside spawned agents, "blast" shows a skill's full downstream cost.
 
     Heavier than scan_corpus (builds turns). `progress(done, total)` is called
     per file. Returns skill_regret()'s shape.
@@ -752,20 +754,27 @@ def scan_skill_regret(root=None, progress=None, paths=None, source="main"):
         mains = [Path(p) for p in paths]
     else:
         mains = list(Path(root).glob("*/*.jsonl"))
+    # (path, fold_subagent_blast) per transcript to scan
     files = []
     if source in ("main", "both"):
-        files += mains
+        files += [(p, False) for p in mains]
+    if source == "blast":
+        files += [(p, True) for p in mains]
     if source in ("subagents", "both"):
         for mp in mains:
-            files += subagent_files(mp)
+            files += [(f, False) for f in subagent_files(mp)]
     agg = {}
-    for n, p in enumerate(files, 1):
+    for n, (p, fold) in enumerate(files, 1):
         try:
             s = load_session(p)
         except Exception:
             s = None
         if s:
-            for sk, a in skill_regret([s]).items():
+            try:
+                subs = load_subagents(p) if fold else None
+            except Exception:
+                subs = None
+            for sk, a in skill_regret([s], subagents=subs).items():
                 # Skip skills that only have injection (0 fires) - they aren't
                 # actually skill executions, just text blocks.
                 if a["fires"] == 0:
@@ -789,12 +798,37 @@ def scan_skill_regret(root=None, progress=None, paths=None, source="main"):
 def _skill_zero():
     return {"fires": 0, "out": 0, "regret_out": 0, "regret_turns": 0,
             "tools": 0, "asks": 0, "secs": 0.0, "hist": {},
+            "sub_out": 0, "sub_tools": 0,
             "inject_chars": 0, "injections": 0,
             "corrections": 0, "self_corrections": 0, "walkbacks": 0,
             "tool_errors": 0, "error_turns": 0, "loops": 0}
 
 
-def skill_regret(sessions):
+def _blast(turn, sub_by_uid):
+    """The subagent work a turn spawned: (out_tokens, tool_calls, hist).
+    Links each Task/Agent tool call to its subagent via tool_use id. Direct
+    children only — nested subagents fold into their own parent's turn."""
+    out, tools, hist = 0, 0, {}
+    for c in turn.tools:
+        if c.name not in ("Task", "Agent"):
+            continue
+        sub = sub_by_uid.get(c.uid)
+        if sub is None:
+            continue
+        out += sub.out
+        for st in sub.session.turns:
+            for sc in st.tools:
+                tools += 1
+                h = hist.setdefault(sc.name, {"calls": 0, "secs": 0.0,
+                                              "wall": 0.0, "out": 0})
+                h["calls"] += 1
+                h["secs"] += sc.dur
+                h["wall"] += sc.wall
+                h["out"] += sc.out
+    return out, tools, hist
+
+
+def skill_regret(sessions, subagents=None):
     """Per-skill behavior profile. `fires` = turns the skill was attributed to.
 
     Keys: fires, out, regret_out, regret_turns, tools (total tool calls),
@@ -805,16 +839,26 @@ def skill_regret(sessions):
     detail screen show WHERE the friction came from — a 100% from one
     correction is different from 100% from twelve tool errors.
     Friction/regret is suspicion, not proof.
+
+    If `subagents` is given (a session's Subagent list), each turn's spawned
+    subagent work is folded into the skill that turn ran — its "blast radius."
+    out/tools then include the downstream subagent cost; sub_out/sub_tools track
+    how much of that came from subagents so the detail screen can split it out.
+    Turn duration already covers the wait, so secs is left untouched.
     """
+    sub_by_uid = {s.task_uid: s for s in (subagents or []) if s.task_uid}
     agg = {}
     for s in sessions:
         for t in s.turns:
             asks = t.asks
+            b_out, b_tools, b_hist = _blast(t, sub_by_uid) if sub_by_uid else (0, 0, {})
             for sk in (t.skills or {"(none)"}):
                 a = agg.setdefault(sk, _skill_zero())
                 a["fires"] += 1
-                a["out"] += t.out
-                a["tools"] += len(t.tools)
+                a["out"] += t.out + b_out
+                a["sub_out"] += b_out
+                a["tools"] += len(t.tools) + b_tools
+                a["sub_tools"] += b_tools
                 a["asks"] += asks
                 a["secs"] += t.duration
                 for c in t.tools:
@@ -825,6 +869,13 @@ def skill_regret(sessions):
                     h["secs"] += c.dur     # exec time
                     h["wall"] += c.wall    # call -> next step
                     h["out"] += c.out      # per-response attribution (overlaps when several tools fire in one response; labeled)
+                for nm, bh in b_hist.items():   # subagent tools the skill triggered
+                    h = a["hist"].setdefault(nm, {"calls": 0, "secs": 0.0,
+                                                  "wall": 0.0, "out": 0})
+                    h["calls"] += bh["calls"]
+                    h["secs"] += bh["secs"]
+                    h["wall"] += bh["wall"]
+                    h["out"] += bh["out"]
                 if t.friction:
                     a["regret_out"] += t.out
                     a["regret_turns"] += 1

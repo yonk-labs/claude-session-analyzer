@@ -502,6 +502,68 @@ def test_load_subagents():
     shutil.rmtree(d, ignore_errors=True)
 
 
+def test_blast_radius():
+    """source='blast' folds a spawned subagent's out/tools into the skill that
+    ran the turn which launched it; main/blast differ by exactly the subagent's
+    contribution, tracked in sub_out/sub_tools."""
+    import os
+    import shutil
+    d = tempfile.mkdtemp()
+    proj = os.path.join(d, "projects", "-home-test")
+    sid, aid = "sess1", "a0deadbeef"
+    os.makedirs(proj)
+    main = os.path.join(proj, f"{sid}.jsonl")
+    main_rows = [
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:00.000Z",
+                    "message": {"role": "user", "content": "go"}}),
+        json.dumps({"type": "assistant", "requestId": "r1",
+                    "attributionSkill": "myskill",
+                    "timestamp": "2026-06-22T10:00:01.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "tool_use", "id": "u_task",
+                                             "name": "Task",
+                                             "input": {"description": "go deep",
+                                                       "prompt": "do it"}}],
+                                "usage": {"output_tokens": 5, "input_tokens": 5}}}),
+        json.dumps({"type": "user", "timestamp": "2026-06-22T10:00:09.000Z",
+                    "toolUseResult": {"agentId": aid},
+                    "message": {"role": "user",
+                                "content": [{"type": "tool_result",
+                                             "tool_use_id": "u_task", "content": "done"}]}}),
+    ]
+    with open(main, "w") as fh:
+        fh.write("\n".join(main_rows))
+    subdir = os.path.join(proj, sid, "subagents")
+    os.makedirs(subdir)
+    sub_rows = [
+        json.dumps({"type": "user", "isSidechain": True, "agentId": aid,
+                    "timestamp": "2026-06-22T10:00:02.000Z",
+                    "message": {"role": "user", "content": "do it"}}),
+        json.dumps({"type": "assistant", "requestId": "s1",
+                    "timestamp": "2026-06-22T10:00:03.000Z",
+                    "message": {"role": "assistant", "model": "claude-opus-4-8",
+                                "content": [{"type": "tool_use", "id": "su1",
+                                             "name": "Grep", "input": {"pattern": "x"}}],
+                                "usage": {"output_tokens": 40, "input_tokens": 10}}}),
+    ]
+    with open(os.path.join(subdir, f"agent-{aid}.jsonl"), "w") as fh:
+        fh.write("\n".join(sub_rows))
+
+    root = os.path.join(d, "projects")
+    m_agg = model.scan_skill_regret(root, source="main")["myskill"]
+    b_agg = model.scan_skill_regret(root, source="blast")["myskill"]
+    # main: just the turn's own 5 out tok + 1 Task call, no subagent credit
+    assert m_agg["out"] == 5 and m_agg["tools"] == 1
+    assert m_agg["sub_out"] == 0 and m_agg["sub_tools"] == 0
+    # blast: + the subagent's 40 out tok and its 1 Grep call
+    assert b_agg["out"] == 45 and b_agg["tools"] == 2
+    assert b_agg["sub_out"] == 40 and b_agg["sub_tools"] == 1
+    assert b_agg["out"] == m_agg["out"] + b_agg["sub_out"]
+    # the subagent's Grep shows up in what the skill triggers
+    assert "Grep" in b_agg["hist"] and "Grep" not in m_agg["hist"]
+    shutil.rmtree(d, ignore_errors=True)
+
+
 def _run():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
