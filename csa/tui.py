@@ -1240,8 +1240,8 @@ class ClaudeTraceApp(App):
         """→ : go forward through history (if any), otherwise no-op."""
         if self._fwd:
             # bypass our push_screen override so we don't clear remaining _fwd
-            Screen = self._fwd.pop()
-            super().push_screen(Screen)
+            s = self._fwd.pop()
+            super().push_screen(s)
 
     def action_refresh(self):
         """r : clear corpus cache and reload current screen's data."""
