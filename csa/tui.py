@@ -718,8 +718,11 @@ class SubagentsScreen(Nav, Screen):
 
 # --------------------------------------------------------------------------- #
 class SkillScreen(Nav, Sortable, Screen):
-    """Corpus-wide per-skill regret leaderboard. Suspicion, not proof."""
-    BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit")]
+    """Corpus-wide per-skill regret leaderboard. Suspicion, not proof.
+    'b' cycles which transcripts count: main / subagents / both."""
+    BINDINGS = [("escape", "app.pop_screen", "Back"), ("q", "app.quit", "Quit"),
+                ("b", "cycle_source", "main/subagent/both")]
+    SOURCES = ("main", "subagents", "both")
     COLS = [
         ("skill", lambda r: r[0], False),
         ("turns", lambda r: r[1]["fires"], True),
@@ -729,11 +732,12 @@ class SkillScreen(Nav, Sortable, Screen):
         ("regret%", lambda r: (r[1]["regret_turns"] / r[1]["fires"] if r[1]["fires"] else 0), True),
     ]
 
-    def __init__(self, root=None, paths=None, scope=""):
+    def __init__(self, root=None, paths=None, scope="", source="main"):
         super().__init__()
         self.root = root
         self.paths = paths
         self.scope = scope
+        self.source = source       # main | subagents | both (cycled with 'b')
         self.rows = []
         self.sort_i, self.sort_rev = 2, True  # default: out desc
 
@@ -748,8 +752,21 @@ class SkillScreen(Nav, Sortable, Screen):
     def on_mount(self):
         self.crumb = "skills"
         self.title = self.crumbs()
-        self.sub_title = f"skill regret · {self.scope}" if self.scope else "skill regret"
+        self._set_sub_title()
         self.table.add_columns(*[c[0] for c in self.COLS])
+        self.load()
+
+    def _set_sub_title(self):
+        scope = f" · {self.scope}" if self.scope else ""
+        self.sub_title = f"skill regret · {self.source}{scope}"
+
+    def action_cycle_source(self):
+        i = self.SOURCES.index(self.source)
+        self.source = self.SOURCES[(i + 1) % len(self.SOURCES)]
+        self._set_sub_title()
+        self.status.update(f"Analyzing {self.source} transcripts…")
+        self.table.clear()
+        self.rows = []
         self.load()
 
     @work(thread=True, exclusive=True)
@@ -757,8 +774,9 @@ class SkillScreen(Nav, Sortable, Screen):
         def prog(n, total):
             if n % 150 == 0 or n == total:
                 self.app.call_from_thread(self.status.update,
-                                          f"Analyzing… {n}/{total} sessions")
-        agg = model.scan_skill_regret(root=self.root, paths=self.paths, progress=prog)
+                                          f"Analyzing {self.source}… {n}/{total} transcripts")
+        agg = model.scan_skill_regret(root=self.root, paths=self.paths,
+                                      source=self.source, progress=prog)
         self.app.call_from_thread(self._populate, agg)
 
     def _populate(self, agg):
@@ -769,11 +787,11 @@ class SkillScreen(Nav, Sortable, Screen):
         low_note = (f" · [dim]{low} skill{'s' if low != 1 else ''} fired <5× "
                     f"(regret% dimmed, sunk in sort)[/dim]") if low else ""
         self.status.update(
-            "[b]turns[/b]=turns the skill ran · [b]tools[/b]=tool calls it triggered · "
+            f"source [b]{self.source}[/b] · [b]turns[/b]=turns the skill ran · "
+            "[b]tools[/b]=tool calls it triggered · "
             "[b]asks[/b]=times it asked YOU a question · [b]regret%[/b]=turns with "
-            "friction [dim](correlation, not proof)[/dim]. Enter a skill to see "
-            "WHERE its friction came from (corrections vs walkbacks vs tool "
-            "errors)." + low_note)
+            "friction [dim](correlation, not proof)[/dim]. Enter a skill for detail · "
+            "[b]b[/b]=main/subagent/both." + low_note)
         self._fill()
 
     def _fill(self):

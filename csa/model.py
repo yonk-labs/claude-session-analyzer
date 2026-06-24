@@ -730,12 +730,20 @@ def scan_corpus(root):
     return list(sessions.values())
 
 
-def scan_skill_regret(root=None, progress=None, paths=None):
+def scan_skill_regret(root=None, progress=None, paths=None, source="main"):
     """Per-skill regret by loading transcripts. Scope with `root` (all projects
     under it) or an explicit `paths` list (e.g. one project's sessions).
 
-    Heavier than scan_corpus (builds turns) but only reads main transcripts.
-    `progress(done, total)` is called per file. Returns skill_regret()'s shape.
+    `source` picks which transcripts to read:
+      "main"      — only the top-level session transcripts (default)
+      "subagents" — only the transcripts of subagents those sessions spawned
+      "both"      — main + subagent transcripts, folded together
+    Subagents run skills too (same attributionSkill parsing); the default "main"
+    matches the rest of the Skills view's history, "subagents"/"both" surface
+    skill usage that happened inside spawned agents.
+
+    Heavier than scan_corpus (builds turns). `progress(done, total)` is called
+    per file. Returns skill_regret()'s shape.
 
     Excludes skills that only appear via injection (SKILL.md text blocks)
     and have zero actual fires (skill attributed to turns).
@@ -744,16 +752,19 @@ def scan_skill_regret(root=None, progress=None, paths=None):
         mains = [Path(p) for p in paths]
     else:
         mains = list(Path(root).glob("*/*.jsonl"))
+    files = []
+    if source in ("main", "both"):
+        files += mains
+    if source in ("subagents", "both"):
+        for mp in mains:
+            files += subagent_files(mp)
     agg = {}
-    for n, p in enumerate(mains, 1):
+    for n, p in enumerate(files, 1):
         try:
             s = load_session(p)
         except Exception:
             s = None
         if s:
-            skill_fires = set()
-            for t in s.turns:
-                skill_fires.update(t.skills)
             for sk, a in skill_regret([s]).items():
                 # Skip skills that only have injection (0 fires) - they aren't
                 # actually skill executions, just text blocks.
@@ -771,7 +782,7 @@ def scan_skill_regret(root=None, progress=None, paths=None):
                     else:
                         b[k] += v
         if progress:
-            progress(n, len(mains))
+            progress(n, len(files))
     return agg
 
 
